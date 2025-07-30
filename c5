@@ -1,4 +1,11 @@
+print("DataFrame Info:")
+print(f"Row count: {clean_df.count()}")
+print(f"Columns: {clean_df.columns}")
 
+# Show first few characters
+clean_df.select("file_name", 
+                clean_df.transcript.substr(1, 100).alias("transcript_preview")
+               ).show(truncate=False)
 
 ```python
 # 
