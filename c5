@@ -1,0 +1,33 @@
+
+
+```python
+# 
+
+def create_and_display_dataframe(result):
+    file_name = os.path.basename(result["file_path"])
+    transcript = result["transcript"]
+    
+    data = [(file_name, transcript)]
+    columns = ["file_name", "transcript"]
+    df = spark.createDataFrame(data, columns)
+    
+    print("DataFrame created successfully!")
+    print(f"File: {file_name}")
+    print(f"Transcript length: {len(transcript)} characters")
+    
+    print("\nDataFrame Schema:")
+    df.printSchema()
+    
+    print("\nFull Transcript:")
+    print("=" * 60)
+    transcript_text = df.select("transcript").collect()[0][0]
+    print(transcript_text)
+    print("=" * 60)
+    
+    return df
+
+if 'result' in locals() and result["status"] == "success":
+    clean_df = create_and_display_dataframe(result)
+```
+
+## **Steps:
