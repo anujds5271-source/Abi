@@ -1,40 +1,23 @@
-print("DataFrame Info:")
-print(f"Row count: {clean_df.count()}")
-print(f"Columns: {clean_df.columns}")
+# First check what variables we have
+print("Available variables:")
+available_vars = [var for var in locals().keys() if not var.startswith('_')]
+print(available_vars)
 
-# Show first few characters
-clean_df.select("file_name", 
-                clean_df.transcript.substr(1, 100).alias("transcript_preview")
-               ).show(truncate=False)
-
-```python
-# 
-
-def create_and_display_dataframe(result):
-    file_name = os.path.basename(result["file_path"])
-    transcript = result["transcript"]
-    
-    data = [(file_name, transcript)]
-    columns = ["file_name", "transcript"]
-    df = spark.createDataFrame(data, columns)
-    
-    print("DataFrame created successfully!")
-    print(f"File: {file_name}")
-    print(f"Transcript length: {len(transcript)} characters")
-    
-    print("\nDataFrame Schema:")
-    df.printSchema()
-    
-    print("\nFull Transcript:")
-    print("=" * 60)
-    transcript_text = df.select("transcript").collect()[0][0]
-    print(transcript_text)
-    print("=" * 60)
-    
-    return df
-
-if 'result' in locals() and result["status"] == "success":
-    clean_df = create_and_display_dataframe(result)
-```
-
-## **Steps:
+# Check if result exists
+if 'result' in locals():
+    print(f"result status: {result.get('status', 'unknown')}")
+    if result["status"] == "success":
+        print("Result is good, creating DataFrame...")
+        
+        file_name = os.path.basename(result["file_path"])
+        transcript = result["transcript"]
+        
+        data = [(file_name, transcript)]
+        columns = ["file_name", "transcript"]
+        clean_df = spark.createDataFrame(data, columns)
+        
+        print("clean_df created successfully!")
+    else:
+        print("Transcription was not successful")
+else:
+    print("result variable not found - please run transcription first")
