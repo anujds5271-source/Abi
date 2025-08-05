@@ -1,23 +1,83 @@
-# First check what variables we have
-print("Available variables:")
-available_vars = [var for var in locals().keys() if not var.startswith('_')]
-print(available_vars)
+def process_mp3_file(mp3_file_path, catalog_name, schema_name, table_name):
+    """
+    Simple MP3 processing - no metadata complexity
+    Just convert audio to text and save to specified table
+    """
+    start_time = time.time()
+    
+    try:
+        print("MP3 TRANSCRIPTION STARTED")
+        
+        # Convert and transcribe
+        wav_path, duration = convert_mp3_to_wav(mp3_file_path)
+        transcript = transcribe_audio(wav_path)
+        
+        # Cleanup temp files
+        try:
+            os.remove(wav_path)
+            os.rmdir(os.path.dirname(wav_path))
+        except:
+            pass
+        
+        # Create simple data
+        file_name = Path(mp3_file_path).name
+        processing_time = time.time() - start_time
+        
+        data = [(
+            mp3_file_path,           # file_path
+            transcript,              # content  
+            1,                       # page_number
+            len(transcript),         # transcript_length
+            round(duration, 2),      # duration_seconds
+            round(processing_time, 2), # processing_time
+            time.strftime("%Y-%m-%d %H:%M:%S")  # timestamp
+        )]
+        
+        columns = [
+            "file_path", "content", "page_number", 
+            "transcript_length", "duration_seconds", 
+            "processing_time", "processed_timestamp"
+        ]
+        
+        df = spark.createDataFrame(data, columns)
+        
+        # Build table name
+        full_table_name = f"{catalog_name}.{schema_name}.{table_name}"
+        
+        # Save to table
+        df.write.mode("append").saveAsTable(full_table_name)
+        
+        print("TRANSCRIPTION COMPLETED")
+        print(f"Saved to: {full_table_name}")
+        print(f"Transcript: {len(transcript)} characters")
 
-# Check if result exists
-if 'result' in locals():
-    print(f"result status: {result.get('status', 'unknown')}")
-    if result["status"] == "success":
-        print("Result is good, creating DataFrame...")
-        
-        file_name = os.path.basename(result["file_path"])
-        transcript = result["transcript"]
-        
-        data = [(file_name, transcript)]
-        columns = ["file_name", "transcript"]
-        clean_df = spark.createDataFrame(data, columns)
-        
-        print("clean_df created successfully!")
-    else:
-        print("Transcription was not successful")
+
+
+
+# Simple execution - just specify your details
+mp3_file_path = "/your/path/to/audio.mp3"
+catalog_name = "bnlwe_ai_foundation_rag_dev" 
+schema_name = "unvsg2__"
+table_name = "audio_transcripts"
+
+# Run pipeline
+result = process_mp3_file(mp3_file_path, catalog_name, schema_name, table_name)
+
+if result["status"] == "success":
+    print(f"SUCCESS: Saved to {result['table']}")
 else:
-    print("result variable not found - please run transcription first")
+    print(f"FAILED: {result['error']}")
+        
+        return {"status": "success", "table": full_table_name}
+        
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        return {"status": "failed", "error": str(e)}
+
+
+
+
+# Change table name to match what you used above
+%sql
+SELECT * FROM bnlwe_ai_foundation_rag_dev.unvsg2__.audio_transcripts 
+ORDER BY processed_timestamp DESC
