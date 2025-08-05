@@ -291,3 +291,22 @@ print("\nAll functions ready! Now you can run your audio processing.")
 **Run cells 1-10 in order, then your pipeline should work perfectly!** 
 
 The issue was that some functions were not defined properly. This complete setup will fix everything! 🚀
+
+
+
+
+
+# =============================================================================
+# EXECUTE THE AUDIO PROCESSING PIPELINE
+# =============================================================================
+
+# STEP 1: CHANGE THIS PATH TO YOUR MP3 FILE LOCATION
+mp3_file_path = "/Workspace/Users/your.email@unilever.com/recordings/your_audio.mp3"
+# ☝️ REPLACE THIS WITH YOUR ACTUAL FILE PATH
+
+# STEP 2: Database details (no change needed)
+catalog_name = "bnlwe_ai_foundation_rag_dev"  
+schema_name = "unvsg2__"                      
+table_name = "audio_transcripts"              
+
+# Rest of the code stays same...
