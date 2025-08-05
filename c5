@@ -81,3 +81,63 @@ else:
 %sql
 SELECT * FROM bnlwe_ai_foundation_rag_dev.unvsg2__.audio_transcripts 
 ORDER BY processed_timestamp DESC
+
+
+
+
+
+
+
+# 2 
+%restart_python
+# Then run:
+pip install azure-cognitiveservices-speech librosa soundfile
+
+
+
+# 3
+
+
+# Complete imports - make sure all these are included
+import os
+import time
+import threading
+import tempfile
+from pathlib import Path
+
+# Azure Speech Services
+import azure.cognitiveservices.speech as speechsdk
+from azure.identity import ClientSecretCredential
+
+# Audio processing
+import librosa
+import soundfile as sf
+
+print("All libraries loaded successfully")
+
+
+
+
+# new one 
+
+
+# Debug cell - run this to check what's missing
+print("Checking if functions exist...")
+
+# Check if functions are defined
+functions_to_check = ['create_speech_config', 'convert_mp3_to_wav', 'transcribe_audio']
+
+for func_name in functions_to_check:
+    if func_name in globals():
+        print(f"✓ {func_name} - EXISTS")
+    else:
+        print(f"✗ {func_name} - MISSING")
+
+# Check if libraries are imported
+libraries = ['os', 'time', 'speechsdk', 'librosa', 'sf', 'Path']
+for lib in libraries:
+    try:
+        eval(lib)
+        print(f"✓ {lib} - IMPORTED")
+    except:
+        print(f"✗ {lib} - NOT IMPORTED")
