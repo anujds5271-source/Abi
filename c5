@@ -89,3 +89,41 @@ def process_mp3_file(mp3_file_path):
 
     except Exception as e:
         print(f"An error occurred: {e}")
+
+
+#cell 5
+
+def create_azure_speech_config():
+    """
+    Create Azure Speech Services configuration.
+    """
+    token = ClientSecretCredential(
+        tenant_id=TENANT_ID,
+        client_id=CLIENT_ID,
+        client_secret=CLIENT_SECRET
+    ).get_token("https://cognitiveservices.azure.com/.default").token
+
+    speech_config = speechsdk.SpeechConfig(
+        authorization_token=token,
+        endpoint=AZURE_ENDPOINT
+    )
+    speech_config.speech_recognition_language = "en-US"
+    print("✅ SUCCESS: Azure Speech Services configuration created.")
+    return speech_config
+
+
+
+
+
+#cell 9 
+
+
+result = process_mp3_file(mp3_file_path)
+
+if result:
+    display(result)
+    result.write.mode("append").saveAsTable("audio_transcripts")
+    print("✅ MP3 transcript pipeline completed and data saved to Delta table.")
+else:
+    print("❌ Transcription failed. Nothing to save.")
+
