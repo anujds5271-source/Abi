@@ -1,312 +1,91 @@
-Looking at the images, I can see that the user is having issues with their audio processing pipeline. Let me analyze what I can see:
+# CELL 7: Transcribe audio (convert speech in MP3 into text using Azure AI)
+def transcribe_audio(file_path, speech_config):
+    """
+    Transcribe audio file (MP3/WAV) into text using Azure Speech Service
+    """
+    recognizer = speechsdk.SpeechRecognizer(
+        speech_config=speech_config,
+        audio_config=speechsdk.AudioConfig(filename=file_path)
+    )
+    done = threading.Event()
+    transcript_parts = []
 
-Image 1 shows what appears to be a debug output or error listing. I can see various functions and modules being checked, including:
-- Various libraries like librosa, speechsdk, sf, Path
-- Functions like create_speech_config, convert_mp3_to_wav, transcribe_audio
-- Some items are marked as "EXISTS" and others as "MISSING" or "NOT IMPORTED"
+    def on_recognized(evt):
+        if evt.result.text:
+            transcript_parts.append(evt.result.text)
 
-Image 2 shows what appears to be more debug information, including:
-- Processing steps
-- Some error messages
-- Various function calls and their status
+    def on_session_stopped(evt):
+        done.set()
 
-From what I can see, it looks like there are missing imports or functions. The debug output shows that some functions exist but others are missing. This is likely why Cell 9 is failing.
+    def on_canceled(evt):
+        print(f"ERROR: Transcription canceled: {evt.reason}")
+        done.set()
 
-Let me provide a comprehensive solution to fix all the missing pieces.
+    recognizer.recognized.connect(on_recognized)
+    recognizer.session_stopped.connect(on_session_stopped)
+    recognizer.canceled.connect(on_canceled)
 
-I can see from your debug output that some functions and imports are missing! Let me help you fix this step by step.
+    recognizer.start_continuous_recognition()
+    done.wait()
+    recognizer.stop_continuous_recognition()
 
-## **PROBLEM: Missing Functions and Imports**
+    full_transcript = " ".join(transcript_parts).strip()
+    if not full_transcript:
+        raise Exception("No speech detected in audio.")
 
-From your debug, I can see:
-- Some functions are **MISSING** 
-- Some libraries are **NOT IMPORTED**
+    return full_transcript
 
-## **SOLUTION: Complete Setup From Scratch**
 
-### **CELL 1: Restart**
-```python
-%restart_python
-```
 
-### **CELL 2: Install Libraries** 
-```python
-pip install azure-cognitiveservices-speech librosa soundfile
-```
 
-### **CELL 3: Complete Imports (FIXED)**
-```python
-# System imports
+
+
+
+# CELL 8: MP3 Processing Pipeline
+from pyspark.sql import SparkSession
 import os
 import time
-import threading
-import tempfile
-from pathlib import Path
 from datetime import datetime
+import pandas as pd
+from pathlib import Path
 
-# Azure Speech Services
-import azure.cognitiveservices.speech as speechsdk
-from azure.identity import ClientSecretCredential
+spark = SparkSession.builder.getOrCreate()
 
-# Audio processing
-import librosa
-import soundfile as sf
-
-print("SUCCESS: All libraries loaded")
-```
-
-### **CELL 4: Azure Configuration**
-```python
-# Azure configuration
-AZURE_ENDPOINT = "https://bnlwe-ai04-d-930710-cognitive-01.cognitiveservices.azure.com/"
-TENANT_ID = "f66fae02-5d36-495b-bfe0-78a6ff9f8e6e"
-CLIENT_ID = "898fc218-182c-4c53-8a31-e8f54c59ad59"
-CLIENT_SECRET = dbutils.secrets.get(scope="databrickskv01", key="svc-b-ai-d-930710-ina-aadprincipal")
-
-print("SUCCESS: Azure config loaded")
-```
-
-### **CELL 5: Azure Connection Function (COMPLETE)**
-```python
-def create_speech_config():
-    """Create Azure Speech Service connection"""
-    try:
-        # Create credential
-        credential = ClientSecretCredential(
-            tenant_id=TENANT_ID,
-            client_id=CLIENT_ID,
-            client_secret=CLIENT_SECRET
-        )
-        
-        # Get token
-        token = credential.get_token("https://cognitiveservices.azure.com/.default").token
-        
-        # Create speech config
-        speech_config = speechsdk.SpeechConfig(endpoint=AZURE_ENDPOINT)
-        speech_config.authorization_token = token
-        speech_config.speech_recognition_language = "en-US"
-        
-        print("SUCCESS: Azure Speech connected")
-        return speech_config
-        
-    except Exception as e:
-        print(f"ERROR: Azure connection failed - {e}")
-        raise
-
-# Create the connection
-speech_config = create_speech_config()
-```
-
-### **CELL 6: Audio Converter Function (COMPLETE)**
-```python
-def convert_mp3_to_wav(mp3_file_path):
-    """Convert MP3 to WAV format"""
-    try:
-        print(f"Converting: {Path(mp3_file_path).name}")
-        
-        # Create temp directory
-        temp_dir = tempfile.mkdtemp()
-        wav_path = os.path.join(temp_dir, "converted_audio.wav")
-        
-        # Load and convert audio
-        audio_data, sample_rate = librosa.load(
-            mp3_file_path, 
-            sr=16000,    # 16kHz for speech
-            mono=True    # Single channel
-        )
-        
-        # Save as WAV
-        sf.write(wav_path, audio_data, 16000, format='wav')
-        
-        # Calculate duration
-        duration_seconds = len(audio_data) / sample_rate
-        
-        print(f"SUCCESS: Converted - Duration: {duration_seconds:.1f}s")
-        return wav_path, duration_seconds
-        
-    except Exception as e:
-        print(f"ERROR: Conversion failed - {e}")
-        raise
-
-print("SUCCESS: convert_mp3_to_wav function created")
-```
-
-### **CELL 7: Speech Recognition Function (COMPLETE)**
-```python
-def transcribe_audio(wav_file_path):
-    """Convert speech to text using Azure AI"""
-    try:
-        print("Starting transcription...")
-        
-        # Setup audio config
-        audio_config = speechsdk.AudioConfig(filename=wav_file_path)
-        recognizer = speechsdk.SpeechRecognizer(speech_config, audio_config)
-        
-        # Variables for results
-        transcript_parts = []
-        done = threading.Event()
-        
-        # Event handlers
-        def on_recognized(evt):
-            if evt.result.text:
-                transcript_parts.append(evt.result.text)
-                print(f"Recognized: {evt.result.text[:50]}...")
-        
-        def on_session_stopped(evt):
-            print("Transcription completed")
-            done.set()
-        
-        def on_canceled(evt):
-            print(f"Recognition canceled: {evt.reason}")
-            done.set()
-        
-        # Connect events
-        recognizer.recognized.connect(on_recognized)
-        recognizer.session_stopped.connect(on_session_stopped)
-        recognizer.canceled.connect(on_canceled)
-        
-        # Start recognition
-        recognizer.start_continuous_recognition()
-        done.wait()
-        recognizer.stop_continuous_recognition()
-        
-        # Combine results
-        full_transcript = " ".join(transcript_parts).strip()
-        
-        if not full_transcript:
-            raise Exception("No speech detected")
-        
-        print(f"SUCCESS: {len(full_transcript)} characters transcribed")
-        return full_transcript
-        
-    except Exception as e:
-        print(f"ERROR: Transcription failed - {e}")
-        raise
-
-print("SUCCESS: transcribe_audio function created")
-```
-
-### **CELL 8: Database Setup**
-```python
-# Set database
-spark.sql("USE CATALOG bnlwe_ai_foundation_rag_dev")
-spark.sql("USE SCHEMA unvsg2__")
-
-print("SUCCESS: Database configured")
-```
-
-### **CELL 9: Main Processing Function (FIXED)**
-```python
-def process_mp3_file(mp3_file_path, catalog_name, schema_name, table_name):
-    """Complete MP3 processing pipeline"""
-    
+def process_mp3_file(mp3_file_path):
     start_time = time.time()
-    
+
     try:
-        print("MP3 TRANSCRIPTION STARTED")
-        print("=" * 40)
-        
-        # Check file exists
+        print("MP3 TRANSCRIPTION PIPELINE STARTED")
+
+        # Step 1: Check MP3 file exists and is .mp3
         if not os.path.exists(mp3_file_path):
-            raise Exception(f"File not found: {mp3_file_path}")
-        
-        # Convert MP3 to WAV
-        wav_path, duration = convert_mp3_to_wav(mp3_file_path)
-        
-        # Transcribe audio
-        transcript = transcribe_audio(wav_path)
-        
-        # Cleanup temp files
-        try:
-            os.remove(wav_path)
-            os.rmdir(os.path.dirname(wav_path))
-        except:
-            pass
-        
-        # Prepare data
-        processing_time = time.time() - start_time
-        
-        data = [(
-            mp3_file_path,                              # file_path
-            transcript,                                 # content
-            1,                                         # page_number
-            len(transcript),                           # transcript_length
-            round(duration, 2),                        # duration_seconds
-            round(processing_time, 2),                 # processing_time
-            time.strftime("%Y-%m-%d %H:%M:%S")        # timestamp
-        )]
-        
-        columns = [
-            "file_path", "content", "page_number", 
-            "transcript_length", "duration_seconds", 
-            "processing_time", "processed_timestamp"
-        ]
-        
-        # Create DataFrame
-        df = spark.createDataFrame(data, columns)
-        
-        # Save to table
-        full_table_name = f"{catalog_name}.{schema_name}.{table_name}"
-        df.write.mode("append").saveAsTable(full_table_name)
-        
-        print("=" * 40)
-        print("SUCCESS: TRANSCRIPTION COMPLETED")
-        print("=" * 40)
-        print(f"Saved to: {full_table_name}")
-        print(f"Transcript: {len(transcript)} characters")
-        print(f"Duration: {duration:.1f} seconds")
-        
-        return {
-            "status": "success", 
-            "table": full_table_name,
-            "transcript_length": len(transcript)
-        }
-        
+            raise Exception(f"MP3 file not found: {mp3_file_path}")
+        if not mp3_file_path.lower().endswith('.mp3'):
+            raise Exception("File must be in MP3 format")
+
+        # Step 2: Extract file info for reporting
+        file_name = Path(mp3_file_path).name
+        file_size = os.path.getsize(mp3_file_path) / (1024 * 1024)  # Convert bytes to MB
+
+        print(f"File: {file_name}")
+        print(f"Size: {file_size:.2f} MB")
+
+        # Step 3: Transcribe audio directly from MP3
+        speech_config = create_azure_speech_config()
+        transcript = transcribe_audio(mp3_file_path, speech_config)
+
+        # Step 4: Prepare data for saving
+        data = [[
+            file_name,
+            transcript,
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # Timestamp
+        ]]
+        columns = ["file_name", "transcript", "timestamp"]
+        audio_df = pd.DataFrame(data, columns=columns)
+
+        # Step 5: Create Spark DataFrame and save to Delta table
+        df = spark.createDataFrame(audio_df)
+        return df
+
     except Exception as e:
-        print("=" * 40)
-        print("ERROR OCCURRED")
-        print("=" * 40)
-        print(f"Error: {str(e)}")
-        return {"status": "failed", "error": str(e)}
-
-print("SUCCESS: process_mp3_file function created")
-```
-
-### **CELL 10: Test Everything**
-```python
-# Test if all functions exist
-print("Testing all functions...")
-
-functions = ['create_speech_config', 'convert_mp3_to_wav', 'transcribe_audio', 'process_mp3_file']
-
-for func in functions:
-    if func in globals():
-        print(f"✓ {func} - EXISTS")
-    else:
-        print(f"✗ {func} - MISSING")
-
-print("\nAll functions ready! Now you can run your audio processing.")
-```
-
-**Run cells 1-10 in order, then your pipeline should work perfectly!** 
-
-The issue was that some functions were not defined properly. This complete setup will fix everything! 🚀
-
-
-
-
-
-# =============================================================================
-# EXECUTE THE AUDIO PROCESSING PIPELINE
-# =============================================================================
-
-# STEP 1: CHANGE THIS PATH TO YOUR MP3 FILE LOCATION
-mp3_file_path = "/Workspace/Users/your.email@unilever.com/recordings/your_audio.mp3"
-# ☝️ REPLACE THIS WITH YOUR ACTUAL FILE PATH
-
-# STEP 2: Database details (no change needed)
-catalog_name = "bnlwe_ai_foundation_rag_dev"  
-schema_name = "unvsg2__"                      
-table_name = "audio_transcripts"              
-
-# Rest of the code stays same...
+        print(f"An error occurred: {e}")
