@@ -1,100 +1,160 @@
-# CELL 1: Install Required Packages
-pip install azure-cognitiveservices-speech pandas
+# CELL 2: Install Required Packages (Updated - Removed unused packages)
+pip install azure-cognitiveservices-speech azure-identity
 
-# CELL 2: Import All Libraries
+# CELL 3: Import Libraries (Updated - Removed unused imports)
 import os
 import time
 import threading
 import warnings
 from pathlib import Path
+import azure.cognitiveservices.speech as speechsdk
+from azure.identity import ClientSecretCredential
+from pyspark.sql import SparkSession
 from datetime import datetime
 import pandas as pd
-import azure.cognitiveservices.speech as speechsdk
-from pyspark.sql import SparkSession
-warnings.filterwarnings("ignore")
-spark = SparkSession.builder.getOrCreate()
+
+# Suppress warnings for cleaner output
+warnings.filterwarnings('ignore')
 print("✅ SUCCESS: All libraries loaded successfully")
 
-# CELL 3: Azure Speech Subscription Config
-SUBSCRIPTION_KEY = dbutils.secrets.get(scope="databricksScope", key="azureSpeechSubscriptionKey")
-REGION = "centralindia"  # Replace with your Azure region
-print("✅ SUCCESS: Azure subscription config loaded")
-
-# CELL 4: Create Azure Speech Config using subscription key
-def create_azure_speech_config():
-    speech_config = speechsdk.SpeechConfig(
-        subscription=SUBSCRIPTION_KEY,
-        region=REGION
-    )
-    speech_config.speech_recognition_language = "en-US"
-    print("✅ SUCCESS: Azure Speech Services configuration created.")
-    return speech_config
-
-# CELL 5: Transcribe audio from MP3 using Azure Speech Service
-def transcribe_audio(file_path, speech_config):
-    recognizer = speechsdk.SpeechRecognizer(
-        speech_config=speech_config,
-        audio_config=speechsdk.AudioConfig(filename=file_path)
-    )
-    done = threading.Event()
-    transcript_parts = []
-
-    def on_recognized(evt):
-        if evt.result.text:
-            transcript_parts.append(evt.result.text)
-
-    def on_session_stopped(evt):
-        done.set()
-
-    def on_canceled(evt):
-        print(f"❌ ERROR: Transcription canceled: {evt.reason}")
-        done.set()
-
-    recognizer.recognized.connect(on_recognized)
-    recognizer.session_stopped.connect(on_session_stopped)
-    recognizer.canceled.connect(on_canceled)
-
-    recognizer.start_continuous_recognition()
-    done.wait()
-    recognizer.stop_continuous_recognition()
-
-    full_transcript = " ".join(transcript_parts).strip()
-    if not full_transcript:
-        raise Exception("❌ No speech detected in audio.")
-
-    return full_transcript
-
-# CELL 6: MP3 Processing Pipeline
-def process_mp3_file(mp3_file_path):
-    start_time = time.time()
+# CELL 6: Transcribe MP3 Directly
+def transcribe_mp3_directly(mp3_file_path):
+    """Transcribe MP3 file directly using Azure Speech Service"""
     try:
-        print("🎤 MP3 TRANSCRIPTION PIPELINE STARTED")
-        if not os.path.exists(mp3_file_path):
-            raise Exception(f"❌ MP3 file not found: {mp3_file_path}")
-        if not mp3_file_path.lower().endswith('.mp3'):
-            raise Exception("❌ File must be in MP3 format")
-        file_name = Path(mp3_file_path).name
-        file_size = os.path.getsize(mp3_file_path) / (1024 * 1024)
-        print(f"📄 File: {file_name} | 💾 Size: {file_size:.2f} MB")
-        speech_config = create_azure_speech_config()
-        transcript = transcribe_audio(mp3_file_path, speech_config)
-        print("✅ SUCCESS: Transcription completed.")
-        data = [[file_name, transcript, datetime.now().strftime("%Y-%m-%d %H:%M:%S")]]
-        columns = ["file_name", "transcript", "timestamp"]
-        audio_df = pd.DataFrame(data, columns=columns)
-        df = spark.createDataFrame(audio_df)
-        print(f"✅ DONE: Completed in {time.time() - start_time:.2f}s")
-        return df
-    except Exception as e:
-        print(f"❌ ERROR: {e}")
-        return None
+        # Create audio config directly with MP3 file
+        audio_config = speechsdk.AudioConfig(filename=mp3_file_path)
+        
+        # Create recognizer with global speech_config
+        recognizer = speechsdk.SpeechRecognizer(
+            speech_config=speech_config, 
+            audio_config=audio_config
+        )
+        
+        # Storage for transcript parts
+        transcript_parts = []
+        done = threading.Event()
+        error_occurred = False
+        error_message = ""
 
-# CELL 7: Run the transcription and save to Delta table
-mp3_file_path = "/Workspace/Users/anuj.b.s@mughalvaren.com/sample-ppt/audio/presentation_script/1_user_say/mygov_1.mp3"
-result = process_mp3_file(mp3_file_path)
-if result:
-    display(result)
-    result.write.mode("append").saveAsTable("audio_transcripts")
-    print("✅ MP3 transcript pipeline completed and data saved to Delta table.")
-else:
-    print("❌ Transcription failed. Nothing to save.")
+        def on_recognized(evt):
+            if evt.result.text:
+                transcript_parts.append(evt.result.text)
+                print(f"📝 Recognized: {evt.result.text[:50]}...")
+
+        def on_session_stopped(evt):
+            print("✅ Transcription session completed")
+            done.set()
+
+        def on_canceled(evt):
+            nonlocal error_occurred, error_message
+            error_occurred = True
+            error_message = f"Transcription canceled: {evt.reason}"
+            if evt.reason == speechsdk.CancellationReason.Error:
+                error_message += f" - Error details: {evt.error_details}"
+            done.set()
+
+        # Connect event handlers
+        recognizer.recognized.connect(on_recognized)
+        recognizer.session_stopped.connect(on_session_stopped)
+        recognizer.canceled.connect(on_canceled)
+
+        # Start transcription
+        print("🎤 Starting MP3 transcription directly...")
+        recognizer.start_continuous_recognition()
+        done.wait()
+        recognizer.stop_continuous_recognition()
+
+        # Check for errors
+        if error_occurred:
+            raise Exception(error_message)
+
+        # Combine transcript parts
+        full_transcript = " ".join(transcript_parts).strip()
+        if not full_transcript:
+            raise Exception("No speech detected in audio file")
+
+        print(f"✅ Transcription completed: {len(full_transcript)} characters")
+        return full_transcript
+
+    except Exception as e:
+        raise Exception(f"MP3 transcription failed: {e}")
+
+# CELL 7: Main Processing Function (Updated for Direct MP3)
+def process_mp3_file(mp3_file_path, table_name="audio_transcripts"):
+    """Complete MP3 processing pipeline - Direct MP3 processing without conversion"""
+    start_time = time.time()
+
+    try:
+        print("🚀 MP3 TRANSCRIPTION PIPELINE STARTED")
+        print("=" * 50)
+
+        # Step 1: Validate input file
+        if not os.path.exists(mp3_file_path):
+            raise Exception(f"MP3 file not found: {mp3_file_path}")
+        if not mp3_file_path.lower().endswith('.mp3'):
+            raise Exception("File must be in MP3 format")
+
+        # Step 2: Extract file info
+        file_name = Path(mp3_file_path).name
+        file_size = os.path.getsize(mp3_file_path) / (1024 * 1024)  # MB
+
+        print(f"📁 File: {file_name}")
+        print(f"📊 Size: {file_size:.2f} MB")
+
+        # Step 3: Transcribe MP3 directly
+        print("\n🎯 Starting MP3 transcription...")
+        transcript = transcribe_mp3_directly(mp3_file_path)
+
+        # Step 4: Prepare data for saving
+        print("\n💾 Preparing data for database...")
+        processing_time = time.time() - start_time
+        
+        data = [[
+            file_name,
+            transcript,
+            len(transcript),
+            round(file_size, 2),
+            round(processing_time, 2),
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ]]
+        
+        columns = [
+            "file_name", "transcript", "transcript_length", 
+            "file_size_mb", "processing_time_seconds", "timestamp"
+        ]
+        
+        # Create DataFrame
+        pandas_df = pd.DataFrame(data, columns=columns)
+        spark_df = spark.createDataFrame(pandas_df)
+
+        # Step 5: Save to table
+        spark_df.write.mode("append").saveAsTable(table_name)
+
+        # Success summary
+        print("\n" + "=" * 50)
+        print("🎉 MP3 TRANSCRIPTION COMPLETED SUCCESSFULLY!")
+        print("=" * 50)
+        print(f"📁 File: {file_name}")
+        print(f"📝 Transcript: {len(transcript)} characters")
+        print(f"⚡ Processing: {processing_time:.1f} seconds")
+        print(f"💾 Saved to: {table_name}")
+        print("=" * 50)
+
+        # Show transcript preview
+        preview = transcript[:200] + "..." if len(transcript) > 200 else transcript
+        print(f"\n📖 TRANSCRIPT PREVIEW:")
+        print("-" * 40)
+        print(preview)
+        print("-" * 40)
+
+        return spark_df
+
+    except Exception as e:
+        error_time = time.time() - start_time
+        print("\n" + "=" * 50)
+        print("❌ MP3 TRANSCRIPTION FAILED!")
+        print("=" * 50)
+        print(f"🚨 Error: {str(e)}")
+        print(f"⏱️  Time: {error_time:.1f} seconds")
+        print("=" * 50)
+        return None
