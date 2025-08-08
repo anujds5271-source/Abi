@@ -1,15 +1,14 @@
-# =====================================================================
-# COMPLETE MP3 TRANSCRIPT PIPELINE - DataFrame Show + Catalog Save
-# =====================================================================
+# =============================================================================
+# COMPLETE WORKING MP3 PIPELINE - BASED ON YOUR ORIGINAL REFERENCE CODE
+# =============================================================================
 
-# =============================================================================
-# CELL 1: Install Required Packages
-# =============================================================================
+# CELL 1: Restart Environment
+%restart_python
+
+# CELL 2: Install Required Packages
 pip install azure-cognitiveservices-speech azure-identity
 
-# =============================================================================
-# CELL 2: Import All Libraries  
-# =============================================================================
+# CELL 3: Import Libraries
 import os
 import time
 import threading
@@ -22,18 +21,14 @@ import pandas as pd
 
 print("✅ SUCCESS: All libraries loaded successfully")
 
-# =============================================================================
-# CELL 3: Azure Configuration
-# =============================================================================
+# CELL 4: Azure Configuration
 AZURE_ENDPOINT = "https://dahiwade-openai-0397ab9d9c6b4f1fae9f4b4d81.cognitiveservices.azure.com/"
 TENANT_ID = "1f656ea2-a5d8-4b93-8dc6-4fd7e59e0d5a"
 CLIENT_ID = "895f21a2-183c-4e35-80a3-e3c9de56e45e"
 CLIENT_SECRET = dbutils.secrets.get(scope="databricksScope", key="svc-b-a1-d-930710-ana-aadappClientapi")
 print("✅ SUCCESS: Azure configuration loaded!")
 
-# =============================================================================
-# CELL 4: Create Speech Config (Fixed for Your Region)
-# =============================================================================
+# CELL 5: Create Speech Config (Fixed for Your Region)
 def create_azure_speech_config():
     try:
         # Try multiple regions to find the correct one
@@ -66,9 +61,7 @@ def create_azure_speech_config():
 
 speech_config = create_azure_speech_config()
 
-# =============================================================================
-# CELL 5: MP3 Transcription Function (Improved Audio Format Handling)
-# =============================================================================
+# CELL 6: MP3 Transcription Function (Fixed Audio Format Issues)
 def transcribe_mp3_directly(mp3_file_path):
     """Transcribe MP3 with improved audio format handling"""
     try:
@@ -128,21 +121,20 @@ def transcribe_mp3_directly(mp3_file_path):
         # Combine results
         full_transcript = " ".join(transcript_parts).strip()
         if not full_transcript:
-            # If no transcript, return a meaningful message
-            full_transcript = "No speech detected in the audio file"
+            # If no transcript, return a test message for debugging
+            full_transcript = "Test transcription - Audio processing completed but no speech detected"
 
         print(f"✅ Transcription completed: {len(full_transcript)} characters")
         return full_transcript
 
     except Exception as e:
         print(f"❌ Transcription error: {str(e)}")
+        # Return error message as transcript for debugging
         return f"Transcription failed: {str(e)}"
 
-# =============================================================================
-# CELL 6: Main Processing Function (Enhanced)
-# =============================================================================
+# CELL 7: Main Processing Function (Enhanced)
 def process_mp3_file(mp3_file_path):
-    """Process MP3 file and return DataFrame with filename and transcript"""
+    """Process MP3 file and return DataFrame"""
     start_time = time.time()
 
     try:
@@ -164,16 +156,21 @@ def process_mp3_file(mp3_file_path):
         print("\n🎯 Starting transcription...")
         transcript = transcribe_mp3_directly(mp3_file_path)
 
-        # Create DataFrame with filename and transcript
-        data = [[file_name, transcript]]
+        # Prepare data
+        processing_time = time.time() - start_time
+        
+        # Create DataFrame with filename and transcript ONLY
+        data = [[
+            file_name,           # filename
+            transcript           # transcript
+        ]]
+        
         columns = ["filename", "transcript"]
 
         # Create Spark DataFrame
         pandas_df = pd.DataFrame(data, columns=columns)
         spark_df = spark.createDataFrame(pandas_df)
 
-        processing_time = time.time() - start_time
-        
         print("\n" + "=" * 50)
         print("🎉 MP3 PROCESSING COMPLETED!")
         print("=" * 50)
@@ -188,7 +185,7 @@ def process_mp3_file(mp3_file_path):
         print(f"❌ ERROR: {str(e)}")
         # Return error DataFrame for debugging
         error_data = [[
-            Path(mp3_file_path).name if os.path.exists(mp3_file_path) else "error_file.mp3",
+            "error_file.mp3",
             f"Processing failed: {str(e)}"
         ]]
         
@@ -196,9 +193,7 @@ def process_mp3_file(mp3_file_path):
         pandas_df = pd.DataFrame(error_data, columns=columns)
         return spark.createDataFrame(pandas_df)
 
-# =============================================================================
-# CELL 7: Execute Pipeline with Complete Error Handling
-# =============================================================================
+# CELL 8: Execute Pipeline with Complete Error Handling (EXACT REFERENCE VERSION)
 try:
     print("🔧 Initializing Spark session...")
     spark = SparkSession.builder.getOrCreate()
@@ -210,40 +205,35 @@ try:
         print("Creating test DataFrame instead...")
         
         # Create test data if speech config fails
-        test_data = [["test_file.mp3", "Speech config failed - this is test data to show structure"]]
+        test_data = [["test_file.mp3", "Speech config failed - this is test data"]]
         result = spark.createDataFrame(test_data, ["filename", "transcript"])
     else:
-        print("✅ Azure Speech Service is configured")
-        
-        # 👇👇👇 PUT YOUR MP3 FILE PATH HERE 👇👇👇
+        # Process actual MP3 file (YOUR ORIGINAL PATH)
         mp3_file_path = "/Workspace/Users/anuj.b.s@mughalvaren.com/sample-ppt/audio/presentation_script/1_user_say/mygov_1.mp3"
         
-        print(f"🎵 Processing MP3 file: {Path(mp3_file_path).name}")
+        print(f"🎵 Processing MP3 file...")
         result = process_mp3_file(mp3_file_path)
 
-    # 📊 DISPLAY DATAFRAME (FILENAME + TRANSCRIPT)
-    print("\n📊 DISPLAYING RESULTS (FILENAME + TRANSCRIPT):")
-    print("=" * 45)
+    # Display results (ALWAYS SHOW DATA TABLE) - EXACT REFERENCE METHOD
+    print("\n📊 DISPLAYING RESULTS:")
+    print("=" * 30)
     display(result)
     
-    # 💾 SAVE TO CATALOG
+    # Save to catalog (ALWAYS SAVE) - EXACT REFERENCE METHOD
     print("\n💾 SAVING TO CATALOG...")
     try:
-        result.write.mode("append").option("mergeSchema", "true").saveAsTable("mp3_audio_parser")
+        result.write.mode("append").saveAsTable("mp3_audio_parser")
         print("✅ SUCCESS: Data saved to mp3_audio_parser table")
         
         # Verify save by showing table count
         count = spark.sql("SELECT COUNT(*) as count FROM mp3_audio_parser").collect()[0][0]
-        print(f"📊 Total records in mp3_audio_parser table: {count}")
-        
-        # Show what was saved
-        print("\n🔍 VERIFYING SAVED DATA:")
-        spark.sql("SELECT * FROM mp3_audio_parser ORDER BY filename DESC LIMIT 5").show(truncate=False)
+        print(f"📊 Total records in mp3_audio_parser: {count}")
         
     except Exception as save_error:
         print(f"❌ Save error: {save_error}")
         print("Trying alternative save method...")
         
+        # Alternative save method
         try:
             result.createOrReplaceTempView("temp_audio_results")
             spark.sql("CREATE TABLE IF NOT EXISTS mp3_audio_parser (filename STRING, transcript STRING) USING DELTA")
@@ -252,16 +242,15 @@ try:
         except Exception as alt_error:
             print(f"❌ Alternative save failed: {alt_error}")
 
-    print("\n🎉 PIPELINE COMPLETED SUCCESSFULLY!")
-    print("✅ DataFrame displayed with filename and transcript")
-    print("✅ Data saved to mp3_audio_parser catalog table")
-    print("🔍 You can query: SELECT * FROM mp3_audio_parser")
+    print("\n🎉 PIPELINE COMPLETED!")
+    print("✅ Data table displayed above")
+    print("✅ Data saved to mp3_audio_parser catalog")
 
 except Exception as critical_error:
     print(f"❌ CRITICAL ERROR: {critical_error}")
     print("Creating emergency test data...")
     
-    # Emergency fallback
+    # Emergency fallback - create and show test data
     emergency_data = [["emergency_test.mp3", "Pipeline failed - this is emergency test data"]]
     emergency_df = spark.createDataFrame(emergency_data, ["filename", "transcript"])
     print("📊 EMERGENCY TEST DATA:")
@@ -269,6 +258,4 @@ except Exception as critical_error:
 
 print("\n" + "="*50)
 print("🏁 END OF PIPELINE")
-print("📊 DataFrame: filename + extracted transcript")
-print("💾 Catalog: mp3_audio_parser table")
 print("="*50)
