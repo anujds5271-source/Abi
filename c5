@@ -1,111 +1,33 @@
-# =============================================================================
-# ULTRA SIMPLE MP3 PIPELINE - MINIMAL CODE
-# =============================================================================
-
-# CELL 1: Restart Environment
-%restart_python
-
-# CELL 2: Install Only What We Need
-pip install azure-cognitiveservices-speech azure-identity
-
-# CELL 3: Simple Imports
-import os
-import time
-import threading
-from pathlib import Path
-import azure.cognitiveservices.speech as speechsdk
-from azure.identity import ClientSecretCredential
-from pyspark.sql import SparkSession
-from datetime import datetime
-import pandas as pd
-
-print("SUCCESS: All libraries loaded successfully")
-
-# CELL 4: Simple Azure Config (SAME AS YOUR WORKING VERSION)
-AZURE_ENDPOINT = "https://dahiwade-openai-0397ab9d9c6b4f1fae9f4b4d81.cognitiveservices.azure.com/"
-TENANT_ID = "1f656ea2-a5d8-4b93-8dc6-4fd7e59e0d5a"
-CLIENT_ID = "895f21a2-183c-4e35-80a3-e3c9de56e45e"
-CLIENT_SECRET = dbutils.secrets.get(scope="databricksScope", key="svc-b-a1-d-930710-ana-aadappClientapi")
-print("SUCCESS: Azure configuration loaded!")
-
-# CELL 5: Simple Speech Config (SAME AS YOUR WORKING VERSION)
-def create_azure_speech_config():
-    credential = ClientSecretCredential(
-        tenant_id=TENANT_ID,
-        client_id=CLIENT_ID,
-        client_secret=CLIENT_SECRET
-    )
-    token = credential.get_token("https://cognitiveservices.azure.com/.default").token
-    speech_config = speechsdk.SpeechConfig(
-        authorization_token=token,
-        endpoint=AZURE_ENDPOINT
-    )
-    speech_config.speech_recognition_language = "en-US"
-    print("SUCCESS: Azure Speech Services configuration created")
-    return speech_config
-
-speech_config = create_azure_speech_config()
-
-# CELL 6: Simple MP3 Transcription (NO DURATION - JUST TRANSCRIPTION)
-def transcribe_mp3_directly(mp3_file_path):
-    audio_config = speechsdk.AudioConfig(filename=mp3_file_path)
-    recognizer = speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_config)
-    done = threading.Event()
-    transcript_parts = []
-
-    def on_recognized(evt):
-        if evt.result.text:
-            transcript_parts.append(evt.result.text)
-
-    def on_session_stopped(evt):
-        done.set()
-
-    def on_canceled(evt):
-        done.set()
-
-    recognizer.recognized.connect(on_recognized)
-    recognizer.session_stopped.connect(on_session_stopped)
-    recognizer.canceled.connect(on_canceled)
-
-    recognizer.start_continuous_recognition()
-    done.wait()
-    recognizer.stop_continuous_recognition()
-
-    full_transcript = " ".join(transcript_parts).strip()
-    if not full_transcript:
-        raise Exception("No speech detected in audio.")
-    return full_transcript
-
-# CELL 7: Simple Processing (SAME STRUCTURE AS YOUR WORKING VERSION)
-def process_mp3_file(mp3_file_path):
-    start_time = time.time()
+# CELL 8: Simple Working Execution
+try:
+    # Initialize Spark
+    spark = SparkSession.builder.getOrCreate()
     
-    print("MP3 TRANSCRIPTION PIPELINE STARTED")
-    
-    file_name = Path(mp3_file_path).name
-    file_size = os.path.getsize(mp3_file_path) / (1024 * 1024)
-    
-    print(f"File: {file_name}")
-    print(f"Size: {file_size:.2f} MB")
-    
-    transcript = transcribe_mp3_directly(mp3_file_path)
-    
-    data = [[
-        file_name,
-        transcript,
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    ]]
-    
-    columns = ["file_name", "transcript", "timestamp"]
-    audio_df = pd.DataFrame(data, columns=columns)
-    df = spark.createDataFrame(audio_df)
-    
-    return df
-
-# CELL 8: Simple Execution (EXACT SAME AS YOUR WORKING VERSION)
-spark = SparkSession.builder.getOrCreate()
-mp3_file_path = "/Workspace/Users/anuj.b.s@mughalvaren.com/sample-ppt/audio/presentation_script/1_user_say/mygov_1.mp3"
-result = process_mp3_file(mp3_file_path)
-display(result)
-result.write.mode("append").saveAsTable("audio_transcripts")
-print("MP3 transcript pipeline completed")
+    # Check if speech_config exists
+    if 'speech_config' not in globals() or speech_config is None:
+        print("ERROR: Speech config not found. Please run Cell 5 first.")
+    else:
+        # Your MP3 file path
+        mp3_file_path = "/Workspace/Users/anuj.b.s@mughalvaren.com/sample-ppt/audio/presentation_script/1_user_say/mygov_1.mp3"
+        
+        # Check if file exists
+        if os.path.exists(mp3_file_path):
+            print(f"Processing: {mp3_file_path}")
+            
+            # Run the pipeline
+            result = process_mp3_file(mp3_file_path)
+            
+            if result is not None:
+                print("SUCCESS: Pipeline completed")
+                display(result)
+                result.write.mode("append").saveAsTable("audio_transcripts")
+                print("MP3 transcript pipeline completed")
+            else:
+                print("ERROR: Pipeline returned None")
+        else:
+            print(f"ERROR: File not found: {mp3_file_path}")
+            print("Please check your file path")
+            
+except Exception as e:
+    print(f"ERROR in Cell 8: {str(e)}")
+    print("Please check previous cells and try again")
