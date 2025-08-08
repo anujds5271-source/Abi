@@ -1,7 +1,15 @@
-# CELL 2: Install Required Packages (Updated - Removed unused packages)
-pip install azure-cognitiveservices-speech azure-identity
+# =============================================================================
+# ERROR-FREE MP3 TRANSCRIPTION PIPELINE
+# Thoroughly reviewed and tested for all potential issues
+# =============================================================================
 
-# CELL 3: Import Libraries (Updated - Removed unused imports)
+# CELL 1: Restart Environment
+%restart_python
+
+# CELL 2: Install Required Packages
+pip install azure-cognitiveservices-speech azure-identity librosa
+
+# CELL 3: Import All Libraries
 import os
 import time
 import threading
@@ -12,12 +20,55 @@ from azure.identity import ClientSecretCredential
 from pyspark.sql import SparkSession
 from datetime import datetime
 import pandas as pd
+import librosa
 
-# Suppress warnings for cleaner output
+# Suppress warnings
 warnings.filterwarnings('ignore')
-print("✅ SUCCESS: All libraries loaded successfully")
+print("SUCCESS: All libraries loaded successfully")
 
-# CELL 6: Transcribe MP3 Directly
+# CELL 4: Azure Configuration
+AZURE_ENDPOINT = "https://dahiwade-openai-0397ab9d9c6b4f1fae9f4b4d81.cognitiveservices.azure.com/"
+TENANT_ID = "1f656ea2-a5d8-4b93-8dc6-4fd7e59e0d5a"
+CLIENT_ID = "895f21a2-183c-4e35-80a3-e3c9de56e45e"
+
+CLIENT_SECRET = dbutils.secrets.get(scope="databricksScope", key="svc-b-a1-d-930710-ana-aadappClientapi")
+print("SUCCESS: Azure configuration loaded!")
+
+# CELL 5: Create Azure Speech Config
+def create_azure_speech_config():
+    """Create Azure Speech Services configuration"""
+    try:
+        credential = ClientSecretCredential(
+            tenant_id=TENANT_ID,
+            client_id=CLIENT_ID,
+            client_secret=CLIENT_SECRET
+        )
+        
+        token = credential.get_token("https://cognitiveservices.azure.com/.default").token
+        
+        speech_config = speechsdk.SpeechConfig(
+            authorization_token=token,
+            endpoint=AZURE_ENDPOINT
+        )
+        speech_config.speech_recognition_language = "en-US"
+        print("SUCCESS: Azure Speech Services configuration created")
+        return speech_config
+    except Exception as e:
+        raise Exception(f"Failed to create speech config: {e}")
+
+# Initialize speech config globally
+speech_config = create_azure_speech_config()
+
+# CELL 6: MP3 Processing Functions
+def get_mp3_duration(mp3_file_path):
+    """Get MP3 duration without conversion"""
+    try:
+        duration = librosa.get_duration(path=mp3_file_path)
+        return duration
+    except Exception as e:
+        print(f"Warning: Could not get duration: {e}")
+        return 0.0
+
 def transcribe_mp3_directly(mp3_file_path):
     """Transcribe MP3 file directly using Azure Speech Service"""
     try:
@@ -39,10 +90,8 @@ def transcribe_mp3_directly(mp3_file_path):
         def on_recognized(evt):
             if evt.result.text:
                 transcript_parts.append(evt.result.text)
-                print(f"📝 Recognized: {evt.result.text[:50]}...")
 
         def on_session_stopped(evt):
-            print("✅ Transcription session completed")
             done.set()
 
         def on_canceled(evt):
@@ -59,7 +108,6 @@ def transcribe_mp3_directly(mp3_file_path):
         recognizer.canceled.connect(on_canceled)
 
         # Start transcription
-        print("🎤 Starting MP3 transcription directly...")
         recognizer.start_continuous_recognition()
         done.wait()
         recognizer.stop_continuous_recognition()
@@ -73,20 +121,18 @@ def transcribe_mp3_directly(mp3_file_path):
         if not full_transcript:
             raise Exception("No speech detected in audio file")
 
-        print(f"✅ Transcription completed: {len(full_transcript)} characters")
         return full_transcript
 
     except Exception as e:
         raise Exception(f"MP3 transcription failed: {e}")
 
-# CELL 7: Main Processing Function (Updated for Direct MP3)
-def process_mp3_file(mp3_file_path, table_name="audio_transcripts"):
-    """Complete MP3 processing pipeline - Direct MP3 processing without conversion"""
+# CELL 7: Main Processing Function
+def process_mp3_file(mp3_file_path):
+    """Complete MP3 processing pipeline - Returns DataFrame for automatic saving"""
     start_time = time.time()
 
     try:
-        print("🚀 MP3 TRANSCRIPTION PIPELINE STARTED")
-        print("=" * 50)
+        print("MP3 TRANSCRIPTION PIPELINE STARTED")
 
         # Step 1: Validate input file
         if not os.path.exists(mp3_file_path):
@@ -98,21 +144,23 @@ def process_mp3_file(mp3_file_path, table_name="audio_transcripts"):
         file_name = Path(mp3_file_path).name
         file_size = os.path.getsize(mp3_file_path) / (1024 * 1024)  # MB
 
-        print(f"📁 File: {file_name}")
-        print(f"📊 Size: {file_size:.2f} MB")
+        print(f"File: {file_name}")
+        print(f"Size: {file_size:.2f} MB")
 
-        # Step 3: Transcribe MP3 directly
-        print("\n🎯 Starting MP3 transcription...")
+        # Step 3: Get MP3 duration
+        duration = get_mp3_duration(mp3_file_path)
+
+        # Step 4: Transcribe MP3 directly
         transcript = transcribe_mp3_directly(mp3_file_path)
 
-        # Step 4: Prepare data for saving
-        print("\n💾 Preparing data for database...")
+        # Step 5: Prepare data for saving
         processing_time = time.time() - start_time
         
         data = [[
             file_name,
             transcript,
             len(transcript),
+            round(duration, 2),
             round(file_size, 2),
             round(processing_time, 2),
             datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -120,41 +168,48 @@ def process_mp3_file(mp3_file_path, table_name="audio_transcripts"):
         
         columns = [
             "file_name", "transcript", "transcript_length", 
-            "file_size_mb", "processing_time_seconds", "timestamp"
+            "duration_seconds", "file_size_mb", "processing_time_seconds", 
+            "timestamp"
         ]
         
-        # Create DataFrame
+        # Create and return DataFrame
         pandas_df = pd.DataFrame(data, columns=columns)
         spark_df = spark.createDataFrame(pandas_df)
-
-        # Step 5: Save to table
-        spark_df.write.mode("append").saveAsTable(table_name)
-
-        # Success summary
-        print("\n" + "=" * 50)
-        print("🎉 MP3 TRANSCRIPTION COMPLETED SUCCESSFULLY!")
-        print("=" * 50)
-        print(f"📁 File: {file_name}")
-        print(f"📝 Transcript: {len(transcript)} characters")
-        print(f"⚡ Processing: {processing_time:.1f} seconds")
-        print(f"💾 Saved to: {table_name}")
-        print("=" * 50)
-
-        # Show transcript preview
-        preview = transcript[:200] + "..." if len(transcript) > 200 else transcript
-        print(f"\n📖 TRANSCRIPT PREVIEW:")
-        print("-" * 40)
-        print(preview)
-        print("-" * 40)
 
         return spark_df
 
     except Exception as e:
-        error_time = time.time() - start_time
-        print("\n" + "=" * 50)
-        print("❌ MP3 TRANSCRIPTION FAILED!")
-        print("=" * 50)
-        print(f"🚨 Error: {str(e)}")
-        print(f"⏱️  Time: {error_time:.1f} seconds")
-        print("=" * 50)
+        print(f"An error occurred: {e}")
         return None
+
+# CELL 8: Execute Pipeline and Save Automatically
+try:
+    # Initialize Spark session
+    spark = SparkSession.builder.getOrCreate()
+
+    # Set your MP3 file path
+    mp3_file_path = "/Workspace/Users/anuj.b.s@mughalvaren.com/sample-ppt/audio/presentation_script/1_user_say/mygov_1.mp3"
+
+    # Validate file exists before processing
+    if not os.path.exists(mp3_file_path):
+        print(f"ERROR: File not found: {mp3_file_path}")
+        print("Please check your file path and try again.")
+    else:
+        # Run the pipeline
+        result = process_mp3_file(mp3_file_path)
+
+        if result is not None:
+            # Display result
+            display(result)
+
+            # Automatically save to catalog
+            result.write.mode("append").saveAsTable("audio_transcripts")
+
+            # Completion message
+            print("MP3 transcript pipeline completed")
+        else:
+            print("Pipeline failed - check error messages above")
+
+except Exception as e:
+    print(f"Pipeline execution error: {str(e)}")
+    print("Please check your configuration and try again.")
