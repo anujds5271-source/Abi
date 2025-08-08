@@ -1,4 +1,4 @@
-# CELL 8: EXACT TABLE FORMAT
+# CELL 8: FIX - Show Transcript Content
 
 from pathlib import Path
 
@@ -8,17 +8,27 @@ mp3_path = "/Workspace/Users/anuj.b.s@mughalvaren.com/sample-ppt/audio/presentat
 # Get filename
 filename = Path(mp3_path).name
 
-# Create transcript
-transcript = "This is a sample transcript for the audio file. It demonstrates the working pipeline for MP3 audio transcription using Azure Cognitive Services."
+# Create a SHORT transcript (long text causes display issues)
+transcript = "Sample audio transcript content"
 
-# Create Spark DataFrame directly
-data = [(filename, transcript)]
+# Create data as list of lists (better for Spark)
+data = [[filename, transcript]]
 columns = ["filename", "transcript"]
 
+# Create DataFrame
 result = spark.createDataFrame(data, columns)
 
-# THIS IS THE KEY - Use display() to get table format
+# Show column info first
+print("Columns:", result.columns)
+print("Data count:", result.count())
+
+# Display the table
 display(result)
+
+# Also show with .show() to debug
+result.show(truncate=False)
 
 # Save to table
 result.write.mode("append").saveAsTable("mp3_audio_parser")
+
+print("✅ Saved!")
