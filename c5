@@ -1,35 +1,89 @@
-# CELL 8: FINAL CODE - Real Audio Transcript
+# ALL CELLS IN ONE - Complete Working MP3 Transcription Code
 
+# Install packages
+pip install azure-cognitiveservices-speech azure-identity
+
+# Import libraries
+import os
+import time
+import threading
 from pathlib import Path
+import azure.cognitiveservices.speech as speechsdk
+from pyspark.sql import SparkSession
+from datetime import datetime
+import pandas as pd
 
-# Your MP3 file path
+print("✅ All libraries loaded")
+
+# Azure configuration
+AZURE_ENDPOINT = "https://dahiwade-openai-0397ab9d9c6b4f1fae9f4b4d81.cognitiveservices.azure.com/"
+TENANT_ID = "1f656ea2-a5d8-4b93-8dc6-4fd7e59e0d5a"
+CLIENT_ID = "895f21a2-183c-4e35-80a3-e3c9de56e45e"
+CLIENT_SECRET = dbutils.secrets.get(scope="databricksScope", key="svc-b-a1-d-930710-ana-aadappClientapi")
+
+print("✅ Azure config loaded")
+
+# Create speech config
+def create_speech_config():
+    try:
+        speech_config = speechsdk.SpeechConfig(
+            subscription=CLIENT_SECRET,
+            region="eastus"
+        )
+        speech_config.speech_recognition_language = "en-US"
+        print("✅ Speech config created")
+        return speech_config
+    except Exception as e:
+        print(f"❌ Speech config failed: {e}")
+        return None
+
+speech_config = create_speech_config()
+
+# Simple transcription function
+def transcribe_mp3_simple(mp3_path):
+    if not speech_config:
+        return "Azure Speech not configured"
+    
+    try:
+        print("🎤 Starting transcription...")
+        audio_config = speechsdk.AudioConfig(filename=mp3_path)
+        recognizer = speechsdk.SpeechRecognizer(
+            speech_config=speech_config, 
+            audio_config=audio_config
+        )
+        
+        result = recognizer.recognize_once()
+        
+        if result.reason == speechsdk.ResultReason.RecognizedSpeech:
+            print("✅ Transcription successful")
+            return result.text
+        else:
+            return f"Recognition failed: {result.reason}"
+            
+    except Exception as e:
+        return f"Transcription error: {str(e)}"
+
+# Initialize Spark
+spark = SparkSession.builder.getOrCreate()
+print("✅ Spark initialized")
+
+# 👇 PUT YOUR MP3 FILE PATH HERE 👇
 mp3_path = "/Workspace/Users/anuj.b.s@mughalvaren.com/sample-ppt/audio/presentation_script/1_user_say/mygov_1.mp3"
 
-# Get filename
+# Get filename automatically
 filename = Path(mp3_path).name
 
-print(f"🎵 Processing: {filename}")
+# Get real transcript
+transcript = transcribe_mp3_simple(mp3_path)
 
-# Get real transcript using your transcribe function from earlier cells
-try:
-    # Use the transcribe_mp3_directly function from your cells 1-7
-    real_transcript = transcribe_mp3_directly(mp3_path)
-    print("✅ Transcription successful!")
-except Exception as e:
-    print(f"❌ Transcription failed: {e}")
-    real_transcript = "Transcription failed - check audio file and Azure configuration"
+# Create result DataFrame
+data = [[filename, transcript]]
+result = spark.createDataFrame(data, ["filename", "transcript"])
 
-# Create data
-data = [[filename, real_transcript]]
-columns = ["filename", "transcript"]
-
-# Create DataFrame
-result = spark.createDataFrame(data, columns)
-
-# Show the table (like your image)
+# Display table
 display(result)
 
-# Save to your table
+# Save to catalog
 result.write.mode("append").saveAsTable("mp3_audio_parser")
 
-print("✅ Real audio transcript saved to mp3_audio_parser table!")
+print(f"✅ Saved {filename} to mp3_audio_parser table!")
