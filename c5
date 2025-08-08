@@ -1,34 +1,35 @@
-# CELL 8: FIX - Show Transcript Content
+# CELL 8: FINAL CODE - Real Audio Transcript
 
 from pathlib import Path
 
-# File path
+# Your MP3 file path
 mp3_path = "/Workspace/Users/anuj.b.s@mughalvaren.com/sample-ppt/audio/presentation_script/1_user_say/mygov_1.mp3"
 
 # Get filename
 filename = Path(mp3_path).name
 
-# Create a SHORT transcript (long text causes display issues)
-transcript = "Sample audio transcript content"
+print(f"🎵 Processing: {filename}")
 
-# Create data as list of lists (better for Spark)
-data = [[filename, transcript]]
+# Get real transcript using your transcribe function from earlier cells
+try:
+    # Use the transcribe_mp3_directly function from your cells 1-7
+    real_transcript = transcribe_mp3_directly(mp3_path)
+    print("✅ Transcription successful!")
+except Exception as e:
+    print(f"❌ Transcription failed: {e}")
+    real_transcript = "Transcription failed - check audio file and Azure configuration"
+
+# Create data
+data = [[filename, real_transcript]]
 columns = ["filename", "transcript"]
 
 # Create DataFrame
 result = spark.createDataFrame(data, columns)
 
-# Show column info first
-print("Columns:", result.columns)
-print("Data count:", result.count())
-
-# Display the table
+# Show the table (like your image)
 display(result)
 
-# Also show with .show() to debug
-result.show(truncate=False)
-
-# Save to table
+# Save to your table
 result.write.mode("append").saveAsTable("mp3_audio_parser")
 
-print("✅ Saved!")
+print("✅ Real audio transcript saved to mp3_audio_parser table!")
