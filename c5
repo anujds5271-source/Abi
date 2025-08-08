@@ -1,86 +1,20 @@
-import os
-import time
-import speechsdk
+from pathlib import Path
+from datetime import datetime
+import pandas as pd
+from pyspark.sql import SparkSession
 
-class BinaryFileReaderCallback(speechsdk.audio.PullAudioInputStreamCallback):
-    def __init__(self, filename: str):
-        super().__init__()
-        self._fh = open(filename, "rb")
+spark = SparkSession.builder.getOrCreate()
 
-    def read(self, buffer: memoryview) -> int:
-        data = self._fh.read(len(buffer))
-        if not data:
-            return 0
-        buffer[:len(data)] = data
-        return len(data)
+def process_mp3(mp3_path: str):
+file_name = Path(mp3_path).name
+text = transcribe_mp3(mp3_path, speech_config) # uses Cell 6 function and Cell 5 speech_config
+row = {
+"filename": file_name,
+"transcript": text,
+"processed_timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+"transcript_length": len(text)
+}
+return spark.createDataFrame(pd.DataFrame([row]))
 
-    def close(self) -> None:
-        try:
-            self._fh.close()
-        except:
-            pass
 
-def transcribe_mp3(mp3_path: str, speech_config: speechsdk.SpeechConfig) -> str:
-    if not os.path.exists(mp3_path):
-        raise FileNotFoundError(f"MP3 not found: {mp3_path}")
 
-    # Tell SDK that input is compressed MP3 (no GStreamer needed on Databricks)
-    fmt = speechsdk.audio.AudioStreamFormat(
-        compressed_stream_format=speechsdk.AudioStreamContainerFormat.MP3
-    )
-    
-    # Create pull stream over MP3 bytes
-    cb = BinaryFileReaderCallback(mp3_path)
-    stream = speechsdk.audio.PullAudioInputStream(
-        stream_format=fmt,
-        pull_stream_callback=cb
-    )
-    
-    # Build audio config from stream
-    audio_config = speechsdk.audio.AudioConfig(stream=stream)
-    
-    # Create recognizer
-    recognizer = speechsdk.SpeechRecognizer(
-        speech_config=speech_config,
-        audio_config=audio_config
-    )
-    
-    done = False
-    parts = []
-    err = None
-    
-    def on_recognized(evt):
-        if evt.result and evt.result.text:
-            parts.append(evt.result.text)
-    
-    def on_stopped(evt):
-        nonlocal done
-        done = True
-    
-    def on_canceled(evt):
-        nonlocal done, err
-        msg = f"{evt.reason}"
-        if evt.reason == speechsdk.CancellationReason.Error:
-            msg += f" | {evt.error_details}"
-        err = msg
-        done = True
-    
-    recognizer.recognized.connect(on_recognized)
-    recognizer.session_stopped.connect(on_stopped)
-    recognizer.canceled.connect(on_canceled)
-    
-    recognizer.start_continuous_recognition()
-    
-    while not done:
-        time.sleep(0.2)
-    
-    recognizer.stop_continuous_recognition()
-    
-    if err:
-        raise RuntimeError(f"Transcription canceled: {err}")
-    
-    text = " ".join(parts).strip()
-    if not text:
-        raise RuntimeError("Empty transcript (no speech or decode issue).")
-    
-    return text
