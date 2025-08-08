@@ -1,19 +1,26 @@
-# CELL 8: SUPER SIMPLE VERSION
+# CELL 8: Auto Filename + Custom Table Name
 
-# 👇 PUT YOUR FILE PATH HERE 👇
-file_path = "/Workspace/Users/anuj.b.s@mughalvaren.com/sample-ppt/audio/presentation_script/1_user_say/mygov_1.mp3"
+from pathlib import Path
 
-# Create data
-data = pd.DataFrame({
-    'filename': ['mygov_1.mp3'],
-    'transcript': ['Test transcript that always works']
-})
+# Your file path
+mp3_path = "/Workspace/Users/anuj.b.s@mughalvaren.com/sample-ppt/audio/presentation_script/1_user_say/mygov_1.mp3"
 
-# Convert to Spark
-result = spark.createDataFrame(data)
+# Get filename automatically
+filename = Path(mp3_path).name
+
+# Get real transcript
+try:
+    transcript = transcribe_mp3_directly(mp3_path)
+except:
+    transcript = "Transcription failed"
+
+# Create result
+result = spark.createDataFrame([(filename, transcript)], ["filename", "transcript"])
 
 # Show it
 display(result)
 
-# Save it
-result.write.mode("overwrite").saveAsTable("audio_results")
+# Save to custom table folder
+result.write.mode("append").option("mergeSchema", "true").saveAsTable("mp3_audio_parser")
+
+print(f"✅ Saved {filename} to mp3_audio_parser table!")
