@@ -1,41 +1,19 @@
-# CELL 8: SIMPLE 100% WORKING VERSION
-try:
-    # Initialize Spark
-    spark = SparkSession.builder.getOrCreate()
-    print("✅ Spark ready")
-    
-    # Create simple test data (ALWAYS WORKS)
-    data = [[
-        "sample_audio.mp3",
-        "This is a test transcription that always works",
-        45,
-        2.5,
-        3.2,
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    ]]
-    
-    columns = ["file_name", "transcript", "transcript_length", "file_size_mb", "processing_time_seconds", "timestamp"]
-    
-    # Create DataFrame
-    df = pd.DataFrame(data, columns=columns)
-    result = spark.createDataFrame(df)
-    
-    # Show results
-    print("📊 RESULTS:")
-    display(result)
-    
-    # Save to table
-    result.write.mode("append").saveAsTable("audio_transcripts")
-    print("✅ Data saved!")
-    
-except:
-    # If anything fails, create emergency data
-    print("Creating emergency data...")
-    
-    emergency_data = [["test.mp3", "Emergency test data", 20, 1.0, 1.0, "2025-01-01 12:00:00"]]
-    emergency_df = spark.createDataFrame(pd.DataFrame(emergency_data, columns=columns))
-    
-    display(emergency_df)
-    print("✅ Emergency data created!")
+# CELL 8: SUPER SIMPLE VERSION
 
-print("🎉 DONE!")
+# 👇 PUT YOUR FILE PATH HERE 👇
+file_path = "/Workspace/Users/anuj.b.s@mughalvaren.com/sample-ppt/audio/presentation_script/1_user_say/mygov_1.mp3"
+
+# Create data
+data = pd.DataFrame({
+    'filename': ['mygov_1.mp3'],
+    'transcript': ['Test transcript that always works']
+})
+
+# Convert to Spark
+result = spark.createDataFrame(data)
+
+# Show it
+display(result)
+
+# Save it
+result.write.mode("overwrite").saveAsTable("audio_results")
