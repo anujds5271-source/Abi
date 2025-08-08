@@ -1,20 +1,18 @@
-from pathlib import Path
-from datetime import datetime
-import pandas as pd
-from pyspark.sql import SparkSession
+CELL 8: Run and save
 
-spark = SparkSession.builder.getOrCreate()
+Update your MP3 path and target table name
+mp3_file_path = "/Workspace/Users/anuj.b.s@mughalvaren.com/sample-ppt/audio/presentation_script/1_user_say/mygov_1.mp3"
+table_name = "mp3_audio_parser"
 
-def process_mp3(mp3_path: str):
-file_name = Path(mp3_path).name
-text = transcribe_mp3(mp3_path, speech_config) # uses Cell 6 function and Cell 5 speech_config
-row = {
-"filename": file_name,
-"transcript": text,
-"processed_timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-"transcript_length": len(text)
-}
-return spark.createDataFrame(pd.DataFrame([row]))
+If you use Unity Catalog, optionally set catalog/schema:
+spark.sql("USE CATALOG your_catalog")
+spark.sql("USE SCHEMA your_schema")
+Run pipeline
+df = process_mp3(mp3_file_path)
 
+Show results
+display(df)
 
-
+Save to Delta table
+df.write.mode("append").saveAsTable(table_name)
+print(f"Saved to table: {table_name}")
