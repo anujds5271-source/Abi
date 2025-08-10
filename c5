@@ -196,16 +196,19 @@ def setup_databricks_environment():
         print(f"WARNING: Could not set catalog/schema - {e}")
         return SparkSession.builder.getOrCreate()
 
+
+
+
 # CELL 8: Execute Pipeline
 # =============================================================================
-# UPDATE THESE VARIABLES WITH YOUR ACTUAL VALUES
+# YOUR ACTUAL AZURE CREDENTIALS
 # =============================================================================
 
-# Your Azure Speech Service credentials (UPDATE THESE)
-SPEECH_SUBSCRIPTION_KEY = "your-actual-speech-subscription-key"
-SPEECH_REGION = "your-region"  # e.g., "eastus", "westus2"
+# Your Azure Speech Service credentials from the image
+SPEECH_SUBSCRIPTION_KEY = "f86eabb2e4b5457da5c58a9ee885fae00"
+SPEECH_REGION = "centralindia"
 
-# Your MP3 file path (UPDATE THIS)
+# Your MP3 file path
 mp3_file_path = "/Workspace/Users/anuj.b.s@mughalvaren.com/sample-ppt/audio/presentation_script/1_user_say/mygov_1.mp3"
 
 # Setup environment
@@ -232,13 +235,12 @@ if result_df is not None:
     print("\nTRANSCRIPT PREVIEW:")
     print("-" * 40)
     preview = transcript_text[:300] + "..." if len(transcript_text) > 300 else transcript_text
-    print(preview)
-    print("-" * 40)
-    
-else:
-    print("FAILED: Pipeline could not process the MP3 file")
+    print(previ
 
-print("\nMP3 transcription pipeline completed")
+
+
+
+
 
 # CELL 9: Batch Processing Function (Optional)
 def process_multiple_mp3_files(folder_path, subscription_key, region):
