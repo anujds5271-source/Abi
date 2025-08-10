@@ -1,48 +1,163 @@
-CELL 7: 
-from pathlib import Path
-from datetime import datetime
-import pandas as pd
+%pip install azure-cognitiveservices-speech librosa soundfile
+
+
+import os
 from pyspark.sql import SparkSession
+
+# Recommended: store in a secret scope
+# SPEECH_KEY = dbutils.secrets.get("your_scope", "AZURE_SPEECH_KEY")
+# SPEECH_REGION = dbutils.secrets.get("your_scope", "AZURE_SPEECH_REGION")
+
+# TEMP for testing only:
+SPEECH_KEY = "<YOUR_SPEECH_KEY>"
+SPEECH_REGION = "<YOUR_SPEECH_REGION>"   # e.g., "eastus"
 
 spark = SparkSession.builder.getOrCreate()
 
-def process_mp3(mp3_path: str):
-    file_name = Path(mp3_path).name
-    text = transcribe_mp3(mp3_path, speech_config)  # uses Cell 6 function and Cell 5 speech_config
-    row = {
-        "filename": file_name,
-        "transcript": text,
-        "processed_timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "transcript_length": len(text)
-    }
-    df = spark.createDataFrame(pd.DataFrame([row]))
-    return df, text  # ab transcript bhi return kar rahe hain
 
 
-cell 8:
-# Update your MP3 path and target table name
-mp3_file_path = "/Workspace/Users/anuj.b.s@mughalvaren.com/sample-ppt/audio/presentation_script/1_user_say/mygov_1.mp3"
-table_name = "mp3_audio_parser"
 
-# If you use Unity Catalog, optionally set catalog/schema:
-# spark.sql("USE CATALOG your_catalog")
-# spark.sql("USE SCHEMA your_schema")
+import os, time, threading
+from pathlib import Path
+import numpy as np
+import librosa
+import pandas as pd
+import azure.cognitiveservices.speech as speechsdk
 
-# Run pipeline - ab df aur transcript dono return hote hain
-df, extracted_transcript = process_mp3(mp3_file_path)
+def _resolve_local(path: str) -> str:
+    """
+    Convert DBFS path to a local path that the Speech SDK can read.
+    """
+    # dbfs:/...  -> /dbfs/...
+    if path.startswith("dbfs:"):
+        return path.replace("dbfs:", "/dbfs")
+    # file:/dbfs/... -> /dbfs/...
+    if path.startswith("file:/dbfs/"):
+        return path.replace("file:", "")
+    return path  # already /dbfs/... or absolute
 
-# Show results
-display(df)
+def _speech_config():
+    cfg = speechsdk.SpeechConfig(subscription=SPEECH_KEY, region=SPEECH_REGION)
+    # Helpful to avoid early timeout on initial silence
+    cfg.set_property(
+        speechsdk.PropertyId.SpeechServiceConnection_InitialSilenceTimeoutMs, "8000"
+    )
+    return cfg
 
-# Save to Delta table
-df.write.mode("append").saveAsTable(table_name)
-print(f"Saved to table: {table_name}")
+def transcribe_mp3_in_memory(mp3_path: str, language: str = "en-US") -> str:
+    """
+    Decode MP3 to 16k/mono PCM in memory, push bytes to Azure Speech via PushAudioInputStream,
+    and return the transcript (continuous recognition).
+    """
+    local_path = _resolve_local(mp3_path)
+    if not os.path.exists(local_path):
+        raise FileNotFoundError(f"Audio not found: {local_path}")
 
-# Print extracted transcript separately
-print("="*50)
-print("EXTRACTED TRANSCRIPT:")
-print("="*50)
-print(extracted_transcript)
-print("="*50)
-print(f"Transcript length: {len(extracted_transcript)} characters")
+    # 1) Decode MP3 -> float32 mono @ 16k (NO temp WAV file)
+    audio_f32, sr = librosa.load(local_path, sr=16000, mono=True)
+    if audio_f32.size == 0:
+        raise ValueError("Decoded audio is empty. Check the file/path.")
 
+    # 2) Convert to 16-bit little-endian PCM bytes
+    audio_i16 = np.clip(audio_f32 * 32767.0, -32768, 32767).astype("<i2")
+    pcm_bytes = audio_i16.tobytes()
+
+    # 3) Create PushAudioInputStream with proper format
+    fmt = speechsdk.audio.AudioStreamFormat(samples_per_second=16000, bits_per_sample=16, channels=1)
+    push_stream = speechsdk.audio.PushAudioInputStream(stream_format=fmt)
+    audio_config = speechsdk.audio.AudioConfig(stream=push_stream)
+
+    # 4) Recognizer
+    cfg = _speech_config()
+    cfg.speech_recognition_language = language
+    recognizer = speechsdk.SpeechRecognizer(speech_config=cfg, audio_config=audio_config)
+
+    done = threading.Event()
+    parts = []
+
+    def on_recognized(evt):
+        if evt.result.reason == speechsdk.ResultReason.RecognizedSpeech and evt.result.text:
+            parts.append(evt.result.text)
+
+    def on_canceled(evt):
+        # Print reason for debugging; still let it finish
+        try:
+            print("Canceled:", evt.reason, getattr(evt, "error_details", None))
+        except Exception:
+            pass
+        done.set()
+
+    def on_session_stopped(evt):
+        done.set()
+
+    recognizer.recognized.connect(on_recognized)
+    recognizer.canceled.connect(on_canceled)
+    recognizer.session_stopped.connect(on_session_stopped)
+
+    # 5) Start recognition, feed bytes in chunks, then close stream
+    recognizer.start_continuous_recognition()
+
+    # One second of audio at 16kHz mono 16-bit = 32000 bytes
+    CHUNK = 32000
+    for i in range(0, len(pcm_bytes), CHUNK):
+        push_stream.write(pcm_bytes[i:i+CHUNK])
+
+    push_stream.close()  # Signal end-of-stream
+
+    # Wait for SDK to finish (max ~3 minutes to be safe)
+    done.wait(timeout=180.0)
+    recognizer.stop_continuous_recognition()
+
+    text = " ".join(parts).strip()
+    if not text:
+        raise RuntimeError("Transcription empty. Check key/region, audio content, or language code.")
+    return text
+
+def transcribe_folder_and_save(mp3_dbfs_dir: str,
+                               catalog: str, schema: str, table: str,
+                               language: str = "en-US"):
+    """
+    - Reads all .mp3 under mp3_dbfs_dir (DBFS)
+    - Transcribes each file
+    - Saves (file_name, transcript) to UC table
+    """
+    # List files in DBFS
+    files = [f.path for f in dbutils.fs.ls(mp3_dbfs_dir) if f.path.lower().endswith(".mp3")]
+    if not files:
+        raise RuntimeError(f"No MP3s found under: {mp3_dbfs_dir}")
+
+    rows = []
+    for f in files:
+        fn = Path(f).name
+        print(f"Transcribing: {fn} ...")
+        try:
+            txt = transcribe_mp3_in_memory(f, language=language)
+            rows.append((fn, txt))
+        except Exception as e:
+            print(f"⚠️ Skipped {fn}: {e}")
+
+    if not rows:
+        raise RuntimeError("All files failed to transcribe. Check logs above.")
+
+    pdf = pd.DataFrame(rows, columns=["file_name", "transcript"])
+
+    # Ensure UC objects exist, then append
+    spark.sql(f"CREATE CATALOG IF NOT EXISTS {catalog}")
+    spark.sql(f"CREATE SCHEMA  IF NOT EXISTS {catalog}.{schema}")
+    sdf = spark.createDataFrame(pdf)
+    sdf.write.mode("append").saveAsTable(f"{catalog}.{schema}.{table}")
+
+    print(f"✅ Saved {len(rows)} rows to {catalog}.{schema}.{table}")
+
+
+
+
+
+
+# Put MP3s in DBFS (e.g., dbfs:/FileStore/audio/)
+# If your files are in Workspace Files (/Workspace/Users/...), move them to DBFS first.
+
+mp3_dir = "dbfs:/FileStore/audio_mp3"          # change as needed
+catalog, schema, table = "dev", "audio", "mp3_transcripts"
+
+transcribe_folder_and_save(mp3_dir, catalog, schema, table, language="en-US")
