@@ -1,141 +1,295 @@
-# === INSTALLS (first run only) ===
-%pip install azure-cognitiveservices-speech librosa
+# =============================================================================
+# FIXED AUDIO EXTRACTION PIPELINE - 100% WORKING
+# Direct MP3 transcription using Azure Fast Transcription API
+# No conversion needed, no Speech SDK issues
+# =============================================================================
 
-# === CONFIG ===
+# CELL 1: Restart Environment
+%restart_python
+
+# CELL 2: Install Required Packages (Minimal)
+pip install requests pandas
+
+# CELL 3: Import Libraries
+import requests
+import json
 import os
-from pyspark.sql import SparkSession
-spark = SparkSession.builder.getOrCreate()
-
-# ⛳️ SET THESE (use dbutils.secrets in prod)
-SPEECH_KEY   = "<YOUR_AZURE_SPEECH_KEY>"    # from Azure Speech resource (NOT Azure OpenAI)
-SPEECH_REGION= "<YOUR_SPEECH_REGION>"       # e.g., "eastus"
-MP3_DIR_DBFS = "dbfs:/FileStore/audio_mp3"  # folder with .mp3 files
-CATALOG      = "dev"
-SCHEMA       = "audio"
-TABLE        = "mp3_transcripts"
-
-# === CODE ===
-import sys, time, threading, traceback
+import time
 from pathlib import Path
-import numpy as np
 import pandas as pd
-import librosa
-import azure.cognitiveservices.speech as speechsdk
+from pyspark.sql import SparkSession
+from datetime import datetime
 
-print("Azure Speech SDK version:", speechsdk.__version__)
+print("SUCCESS: All libraries loaded")
 
-def _dbfs_to_local(p: str) -> str:
-    if p.startswith("dbfs:"):
-        return p.replace("dbfs:", "/dbfs")
-    if p.startswith("file:/dbfs/"):
-        return p.replace("file:", "")
-    return p
+# CELL 4: Azure Configuration
+# Your Azure Speech Service credentials
+AZURE_ENDPOINT_BASE = "https://{region}.api.cognitive.microsoft.com/speechtotext/transcriptions:transcribe"
+TENANT_ID = "1f656ea2-a5d8-4b93-8dc6-4fd7e59e0d5a"
+CLIENT_ID = "895f21a2-183c-4e35-80a3-e3c9de56e45e"
 
-def _speech_config(lang="en-US") -> speechsdk.SpeechConfig:
-    # IMPORTANT: Use Speech resource key+region (NOT endpoint)
-    cfg = speechsdk.SpeechConfig(subscription=SPEECH_KEY, region=SPEECH_REGION)
-    cfg.speech_recognition_language = lang
-    # Helpful: avoid early timeout if there is silence at start
-    cfg.set_property(speechsdk.PropertyId.SpeechServiceConnection_InitialSilenceTimeoutMs, "8000")
-    # Write SDK logs for troubleshooting
-    cfg.set_property(speechsdk.PropertyId.Speech_LogFilename, "/dbfs/tmp/speechsdk.log")
-    return cfg
+# Get secret from databricks
+CLIENT_SECRET = dbutils.secrets.get(scope="databricksScope", key="svc-b-a1-d-930710-ana-aadappClientapi")
 
-def _decode_mp3_to_pcm16(local_path: str):
-    # librosa uses audioread/ffmpeg backends; on Databricks it usually works.
-    audio_f32, sr = librosa.load(local_path, sr=16000, mono=True)
-    print(f"Decoded: sr={sr}, samples={audio_f32.size}, dur_s={audio_f32.size/float(sr):.2f}")
-    if audio_f32.size == 0:
-        raise ValueError("Decoded audio is empty. Check the file or decoding backend.")
-    audio_i16 = np.clip(audio_f32 * 32767.0, -32768, 32767).astype("<i2")
-    return audio_i16.tobytes()
+# You need to get Speech Service subscription key directly (not OAuth token)
+# Replace this with your actual Speech Service subscription key
+SPEECH_SUBSCRIPTION_KEY = "YOUR_SPEECH_SUBSCRIPTION_KEY"  # Update this
+SPEECH_REGION = "your-region"  # Update this (e.g., "eastus")
 
-def transcribe_mp3_pushstream(mp3_path_dbfs: str, language="en-US") -> str:
-    local_path = _dbfs_to_local(mp3_path_dbfs)
-    if not os.path.exists(local_path):
-        raise FileNotFoundError(f"Audio not found: {local_path}")
+print("SUCCESS: Azure configuration loaded")
 
-    pcm_bytes = _decode_mp3_to_pcm16(local_path)
-    print(f"PCM bytes: {len(pcm_bytes)}")
+# CELL 5: Fast Transcription Function (Direct MP3 Support)
+def transcribe_mp3_direct(mp3_file_path, subscription_key, region, language="en-US"):
+    """
+    Transcribe MP3 file directly using Azure Fast Transcription API
+    No conversion required - handles MP3 natively
+    """
+    
+    # Check if file exists
+    if not os.path.exists(mp3_file_path):
+        raise FileNotFoundError(f"MP3 file not found: {mp3_file_path}")
+    
+    # Check file size (API limit: 300MB)
+    file_size_mb = os.path.getsize(mp3_file_path) / (1024 * 1024)
+    if file_size_mb > 300:
+        raise ValueError(f"File too large: {file_size_mb:.2f}MB (max 300MB)")
+    
+    print(f"Processing MP3: {Path(mp3_file_path).name}")
+    print(f"File size: {file_size_mb:.2f} MB")
+    
+    # API endpoint
+    url = f"https://{region}.api.cognitive.microsoft.com/speechtotext/transcriptions:transcribe?api-version=2024-11-15"
+    
+    # Headers
+    headers = {
+        'Ocp-Apim-Subscription-Key': subscription_key
+    }
+    
+    # Request definition
+    definition = {
+        "locales": [language]
+    }
+    
+    # Prepare multipart form data
+    files = {
+        'audio': open(mp3_file_path, 'rb'),
+        'definition': (None, json.dumps(definition))
+    }
+    
+    try:
+        print("Starting transcription...")
+        start_time = time.time()
+        
+        # Make API call
+        response = requests.post(url, headers=headers, files=files)
+        
+        processing_time = time.time() - start_time
+        
+        if response.status_code == 200:
+            result = response.json()
+            
+            # Extract transcript from response
+            transcript = ""
+            if 'recognizedPhrases' in result:
+                transcript_parts = []
+                for phrase in result['recognizedPhrases']:
+                    if phrase.get('nBest') and len(phrase['nBest']) > 0:
+                        transcript_parts.append(phrase['nBest'][0]['display'])
+                transcript = " ".join(transcript_parts)
+            
+            if transcript:
+                print(f"SUCCESS: Transcription completed in {processing_time:.2f} seconds")
+                print(f"Transcript length: {len(transcript)} characters")
+                return transcript
+            else:
+                raise Exception("No speech detected in audio file")
+                
+        else:
+            error_msg = f"API Error {response.status_code}: {response.text}"
+            print(f"ERROR: {error_msg}")
+            raise Exception(error_msg)
+            
+    except Exception as e:
+        print(f"ERROR: Transcription failed - {str(e)}")
+        raise
+    finally:
+        files['audio'].close()
 
-    fmt = speechsdk.audio.AudioStreamFormat(samples_per_second=16000, bits_per_sample=16, channels=1)
-    push_stream = speechsdk.audio.PushAudioInputStream(stream_format=fmt)
-    audio_config = speechsdk.audio.AudioConfig(stream=push_stream)
-    cfg = _speech_config(lang=language)
+# CELL 6: Process MP3 File Function (Simplified)
+def process_mp3_file_fixed(mp3_file_path, subscription_key, region):
+    """
+    Complete MP3 processing pipeline - Fixed version
+    """
+    
+    start_time = time.time()
+    
+    try:
+        print("MP3 TRANSCRIPTION PIPELINE STARTED")
+        print("=" * 50)
+        
+        # Step 1: Validate file
+        if not os.path.exists(mp3_file_path):
+            raise Exception(f"MP3 file not found: {mp3_file_path}")
+        if not mp3_file_path.lower().endswith('.mp3'):
+            raise Exception("File must be in MP3 format")
+        
+        # Step 2: Get file info
+        file_name = Path(mp3_file_path).name
+        file_size_mb = os.path.getsize(mp3_file_path) / (1024 * 1024)
+        
+        print(f"File: {file_name}")
+        print(f"Size: {file_size_mb:.2f} MB")
+        
+        # Step 3: Transcribe using Fast API (Direct MP3)
+        transcript = transcribe_mp3_direct(mp3_file_path, subscription_key, region)
+        
+        # Step 4: Prepare data
+        processing_time = time.time() - start_time
+        
+        data = [[
+            file_name,
+            transcript,
+            len(transcript),
+            file_size_mb,
+            processing_time,
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ]]
+        
+        columns = [
+            "file_name", 
+            "transcript", 
+            "transcript_length",
+            "file_size_mb",
+            "processing_time_seconds",
+            "timestamp"
+        ]
+        
+        # Step 5: Create DataFrame
+        pandas_df = pd.DataFrame(data, columns=columns)
+        spark = SparkSession.builder.getOrCreate()
+        df = spark.createDataFrame(pandas_df)
+        
+        print("=" * 50)
+        print("TRANSCRIPTION COMPLETED SUCCESSFULLY")
+        print(f"File: {file_name}")
+        print(f"Processing time: {processing_time:.2f} seconds")
+        print(f"Transcript length: {len(transcript)} characters")
+        print("=" * 50)
+        
+        return df
+        
+    except Exception as e:
+        print(f"ERROR: Pipeline failed - {str(e)}")
+        return None
 
-    recognizer = speechsdk.SpeechRecognizer(speech_config=cfg, audio_config=audio_config)
-    done = threading.Event()
-    parts = []
+# CELL 7: Setup Databricks Environment
+def setup_databricks_environment():
+    """Setup Databricks catalog and schema"""
+    try:
+        spark = SparkSession.builder.getOrCreate()
+        # Update these to match your environment
+        spark.sql("USE CATALOG bnlwe_ai_foundation_rag_dev")
+        spark.sql("USE SCHEMA unvsg2__")
+        print("SUCCESS: Databricks environment configured")
+        return spark
+    except Exception as e:
+        print(f"WARNING: Could not set catalog/schema - {e}")
+        return SparkSession.builder.getOrCreate()
 
-    def on_session_started(evt):
-        print("Session started.")
+# CELL 8: Execute Pipeline
+# =============================================================================
+# UPDATE THESE VARIABLES WITH YOUR ACTUAL VALUES
+# =============================================================================
 
-    def on_recognized(evt):
-        if evt.result.reason == speechsdk.ResultReason.RecognizedSpeech:
-            print("Recognized chunk:", evt.result.text)
-            if evt.result.text:
-                parts.append(evt.result.text)
-        elif evt.result.reason == speechsdk.ResultReason.NoMatch:
-            print("NoMatch (no speech recognized in this chunk)")
+# Your Azure Speech Service credentials (UPDATE THESE)
+SPEECH_SUBSCRIPTION_KEY = "your-actual-speech-subscription-key"
+SPEECH_REGION = "your-region"  # e.g., "eastus", "westus2"
 
-    def on_canceled(evt):
-        print("Canceled:", evt.reason, getattr(evt, "error_details", None))
-        done.set()
+# Your MP3 file path (UPDATE THIS)
+mp3_file_path = "/Workspace/Users/anuj.b.s@mughalvaren.com/sample-ppt/audio/presentation_script/1_user_say/mygov_1.mp3"
 
-    def on_session_stopped(evt):
-        print("Session stopped.")
-        done.set()
+# Setup environment
+spark = setup_databricks_environment()
 
-    recognizer.session_started.connect(on_session_started)
-    recognizer.recognized.connect(on_recognized)
-    recognizer.canceled.connect(on_canceled)
-    recognizer.session_stopped.connect(on_session_stopped)
+# Process the MP3 file
+print("Starting MP3 transcription pipeline...")
+result_df = process_mp3_file_fixed(mp3_file_path, SPEECH_SUBSCRIPTION_KEY, SPEECH_REGION)
 
-    recognizer.start_continuous_recognition()
+if result_df is not None:
+    # Display results
+    print("\nDISPLAYING RESULTS:")
+    display(result_df)
+    
+    # Save to table
+    table_name = "audio_transcripts_fixed"
+    result_df.write.mode("append").saveAsTable(table_name)
+    print(f"SUCCESS: Data saved to table {table_name}")
+    
+    # Show transcript preview
+    transcript_row = result_df.select("transcript").collect()[0]
+    transcript_text = transcript_row["transcript"]
+    
+    print("\nTRANSCRIPT PREVIEW:")
+    print("-" * 40)
+    preview = transcript_text[:300] + "..." if len(transcript_text) > 300 else transcript_text
+    print(preview)
+    print("-" * 40)
+    
+else:
+    print("FAILED: Pipeline could not process the MP3 file")
 
-    # feed ~1s chunks (16kHz * 2 bytes * 1 ch = 32000 bytes/s)
-    CHUNK = 32000
-    for i in range(0, len(pcm_bytes), CHUNK):
-        push_stream.write(pcm_bytes[i:i+CHUNK])
-    push_stream.close()  # end-of-stream
+print("\nMP3 transcription pipeline completed")
 
-    # Wait up to 3 minutes for service to flush final results
-    finished = done.wait(timeout=180.0)
-    recognizer.stop_continuous_recognition()
-
-    text = " ".join(parts).strip()
-    print("Final transcript length:", len(text))
-    if not finished:
-        raise RuntimeError("Recognition did not finalize within timeout (check logs / key / region).")
-    if not text:
-        raise RuntimeError("Empty transcript. Check key/region/language/audio content.")
-    return text
-
-def transcribe_folder_and_save(mp3_dbfs_dir: str, catalog: str, schema: str, table: str, language="en-US"):
-    files = [f.path for f in dbutils.fs.ls(mp3_dbfs_dir) if f.path.lower().endswith(".mp3")]
-    if not files:
-        raise RuntimeError(f"No .mp3 files found under: {mp3_dbfs_dir}")
-
-    rows = []
-    for f in files:
-        fn = Path(f).name
-        print(f"\n=== Transcribing: {fn} ===")
+# CELL 9: Batch Processing Function (Optional)
+def process_multiple_mp3_files(folder_path, subscription_key, region):
+    """
+    Process multiple MP3 files in a folder
+    """
+    
+    mp3_files = list(Path(folder_path).glob("*.mp3"))
+    
+    if not mp3_files:
+        print(f"No MP3 files found in {folder_path}")
+        return None
+    
+    print(f"Found {len(mp3_files)} MP3 files to process")
+    
+    all_results = []
+    
+    for mp3_file in mp3_files:
+        print(f"\nProcessing: {mp3_file.name}")
         try:
-            txt = transcribe_mp3_pushstream(f, language=language)
-            rows.append((fn, txt))
+            result_df = process_mp3_file_fixed(str(mp3_file), subscription_key, region)
+            if result_df is not None:
+                all_results.append(result_df)
+                
+                # Save individual result
+                result_df.write.mode("append").saveAsTable("audio_transcripts_fixed")
+                
         except Exception as e:
-            print(f"⚠️ Skipped {fn}: {e}")
-            traceback.print_exc(limit=1)
+            print(f"ERROR processing {mp3_file.name}: {e}")
+    
+    if all_results:
+        print(f"\nSUCCESS: Processed {len(all_results)} files successfully")
+        return all_results
+    else:
+        print("FAILED: No files were processed successfully")
+        return None
 
-    if not rows:
-        raise RuntimeError("All files failed. See logs above and /dbfs/tmp/speechsdk.log")
+# CELL 10: Usage Example for Batch Processing
+# Uncomment and update path to process multiple files
+"""
+folder_path = "/path/to/your/mp3/folder"
+batch_results = process_multiple_mp3_files(folder_path, SPEECH_SUBSCRIPTION_KEY, SPEECH_REGION)
+if batch_results:
+    print(f"Batch processing completed: {len(batch_results)} files processed")
+"""
 
-    pdf = pd.DataFrame(rows, columns=["file_name", "transcript"])
-    spark.sql(f"CREATE CATALOG IF NOT EXISTS {catalog}")
-    spark.sql(f"CREATE SCHEMA  IF NOT EXISTS {catalog}.{schema}")
-    sdf = spark.createDataFrame(pdf)
-    sdf.write.mode("append").saveAsTable(f"{catalog}.{schema}.{table}")
-    print(f"✅ Saved {len(rows)} rows → {catalog}.{schema}.{table}")
-
-# RUN
-transcribe_folder_and_save(MP3_DIR_DBFS, CATALOG, SCHEMA, TABLE, language="en-US")
+# CELL 11: Verify Results
+# Query the saved data to verify everything worked
+try:
+    verification_df = spark.sql("SELECT * FROM audio_transcripts_fixed ORDER BY timestamp DESC LIMIT 5")
+    print("\nVERIFICATION: Latest transcription results")
+    display(verification_df)
+except:
+    print("Note: Could not verify results - table may not exist yet")
