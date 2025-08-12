@@ -57,9 +57,7 @@ def get_access_token():
 # ==========================================
 
 def transcribe_mp3_memory_only(mp3_file_path):
-    """
-    Complete MP3 transcription - your working method
-    """
+    """Complete MP3 transcription - your working method"""
     if not os.path.exists(mp3_file_path):
         print(f"File not found: {mp3_file_path}")
         return None
@@ -180,54 +178,50 @@ def transcribe_mp3_memory_only(mp3_file_path):
         return None
 
 # ==========================================
-# CELL 4: DataFrame and Catalog Functions
+# CELL 4: Simple DataFrame Functions
 # ==========================================
 
-def create_transcript_dataframe(mp3_file_path, transcript):
-    """Create DataFrame with transcript"""
+def create_simple_dataframe(mp3_file_path, transcript):
+    """Create simple DataFrame with only filename and transcript"""
     filename = os.path.basename(mp3_file_path)
     
     df = pd.DataFrame({
         'filename': [filename],
-        'transcript': [transcript if transcript else "TRANSCRIPTION_FAILED"],
-        'file_path': [mp3_file_path],
-        'transcript_length': [len(transcript) if transcript else 0],
-        'status': ["SUCCESS" if transcript else "FAILED"],
-        'processed_timestamp': [pd.Timestamp.now()]
+        'transcript': [transcript if transcript else "TRANSCRIPTION_FAILED"]
     })
     
     return df
 
-def display_dataframe_full(df):
-    """Display complete DataFrame with full transcript"""
+def display_simple_dataframe(df):
+    """Display clean DataFrame with full transcript"""
     pd.set_option('display.max_columns', None)
     pd.set_option('display.max_colwidth', None)
     pd.set_option('display.width', None)
     pd.set_option('display.expand_frame_repr', False)
     
     print("MP3 TRANSCRIPTION RESULTS")
-    print("=" * 120)
+    print("=" * 100)
     print(df.to_string(index=False, justify='left'))
-    print("=" * 120)
+    print("=" * 100)
     
     return df
 
 def create_catalog_and_save(df):
-    """Create new catalog/schema and save table"""
+    """Create catalog and save simple table"""
     try:
         spark = SparkSession.builder.getOrCreate()
         
         # Create catalog if not exists
         try:
             spark.sql(f"CREATE CATALOG IF NOT EXISTS {CATALOG_NAME}")
-            print(f"Catalog created/verified: {CATALOG_NAME}")
+            print(f"Catalog created: {CATALOG_NAME}")
         except:
             print(f"Using existing catalog: {CATALOG_NAME}")
         
         # Create schema if not exists
         try:
             spark.sql(f"CREATE SCHEMA IF NOT EXISTS {CATALOG_NAME}.{SCHEMA_NAME}")
-            print(f"Schema created/verified: {SCHEMA_NAME}")
+            print(f"Schema created: {SCHEMA_NAME}")
         except:
             print(f"Using existing schema: {SCHEMA_NAME}")
         
@@ -246,10 +240,6 @@ def create_catalog_and_save(df):
         print(f"Table saved: {full_table_name}")
         print(f"Records saved: {len(df)}")
         
-        # Show table structure
-        print("\nTable structure:")
-        spark.sql(f"DESCRIBE TABLE {full_table_name}").show()
-        
         return True
         
     except Exception as e:
@@ -257,11 +247,11 @@ def create_catalog_and_save(df):
         return False
 
 # ==========================================
-# CELL 5: Complete Pipeline Execution
+# CELL 5: Complete Pipeline
 # ==========================================
 
-def run_complete_pipeline(mp3_file_path):
-    """Complete pipeline: MP3 -> Transcript -> DataFrame -> Catalog"""
+def run_simple_pipeline(mp3_file_path):
+    """Simple pipeline: MP3 -> Transcript -> Simple DataFrame -> Catalog"""
     
     print("=" * 80)
     print("MP3 TO TEXT TRANSCRIPTION PIPELINE")
@@ -277,13 +267,13 @@ def run_complete_pipeline(mp3_file_path):
     print(f"\n2. Processing: {os.path.basename(mp3_file_path)}")
     transcript = transcribe_mp3_memory_only(mp3_file_path)
     
-    # Step 3: Create DataFrame
+    # Step 3: Create simple DataFrame (only filename and transcript)
     print("\n3. Creating DataFrame...")
-    df = create_transcript_dataframe(mp3_file_path, transcript)
+    df = create_simple_dataframe(mp3_file_path, transcript)
     
     # Step 4: Display results
     print("\n4. Results:")
-    display_dataframe_full(df)
+    display_simple_dataframe(df)
     
     # Step 5: Save to catalog
     print("\n5. Saving to catalog...")
@@ -302,12 +292,12 @@ def run_complete_pipeline(mp3_file_path):
 # MP3 file path - TU YAHA APNA PATH DAAL
 mp3_file = "/path/to/your/audio.mp3"  # UPDATE THIS PATH
 
-# Run complete pipeline
+# Run simple pipeline
 if mp3_file != "/path/to/your/audio.mp3":
-    df_result = run_complete_pipeline(mp3_file)
+    df_result = run_simple_pipeline(mp3_file)
 else:
     print("Please update mp3_file with your actual file path")
     print("Example: mp3_file = '/Workspace/Shared/my_audio.mp3'")
 
-# Query saved data example
-# spark.sql(f"SELECT * FROM {CATALOG_NAME}.{SCHEMA_NAME}.{TABLE_NAME}").show()
+# Query saved data (only filename and transcript columns)
+# spark.sql(f"SELECT filename, transcript FROM {CATALOG_NAME}.{SCHEMA_NAME}.{TABLE_NAME}").show()
