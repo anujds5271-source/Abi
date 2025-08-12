@@ -6,38 +6,21 @@ def create_simple_dataframe(mp3_file_path, transcript):
     """Create simple DataFrame with only filename and transcript"""
     filename = os.path.basename(mp3_file_path)
     
-    # Make sure filename is not empty and properly extracted
     if not filename or filename == "":
         filename = "unknown_file.mp3"
-    
-    print(f"Creating DataFrame with filename: {filename}")  # Debug line
     
     df = pd.DataFrame({
         'file_name': [filename],
         'transcript': [transcript if transcript else "TRANSCRIPTION_FAILED"]
     })
     
-    # Check DataFrame before returning
-    print(f"DataFrame created - file_name: {df['file_name'].iloc[0]}")
-    
     return df
 
 def display_simple_dataframe(df):
     """Display clean DataFrame with full transcript"""
     spark = SparkSession.builder.getOrCreate()
-    
-    # Print pandas DataFrame first to verify data
-    print("Pandas DataFrame content:")
-    print(df)
-    
     spark_df = spark.createDataFrame(df)
     
-    # Verify Spark DataFrame
-    print("Spark DataFrame content:")
-    spark_df.show(truncate=False)
-    
-    print("MP3 TRANSCRIPTION RESULTS")
-    print("=" * 50)
     display(spark_df)
     
     return spark_df
@@ -52,25 +35,13 @@ def create_catalog_and_save(spark_df):
         
         full_table_name = f"{CATALOG_NAME}.{SCHEMA_NAME}.{TABLE_NAME}"
         
-        # Check DataFrame before saving
-        print("Data being saved:")
-        spark_df.show(truncate=False)
-        
         spark_df.write \
             .mode("append") \
             .option("mergeSchema", "true") \
             .saveAsTable(full_table_name)
         
-        print(f"Table saved: {full_table_name}")
-        print(f"Records saved: {spark_df.count()}")
-        
-        # Immediately verify what was saved
-        print("Verifying saved data:")
-        verification = spark.sql(f"SELECT * FROM {full_table_name} ORDER BY file_name DESC LIMIT 1")
-        verification.show(truncate=False)
-        
         return True
         
     except Exception as e:
-        print(f"Catalog save error: {str(e)}")
+        print(f"Error: {str(e)}")
         return False
