@@ -1,31 +1,4 @@
 # ==========================================
-# CELL 1: Setup and Dependencies
-# ==========================================
-
-import os
-import requests
-import azure.cognitiveservices.speech as speechsdk
-import librosa
-import numpy as np
-import pandas as pd
-from pyspark.sql import SparkSession
-
-# Azure Configuration
-TENANT_ID = "1f656ea2-a5d8-4b93-8dc6-4fd7e59e0d5a"
-CLIENT_ID = "895f21a2-183c-4e35-80a3-e3c9de56e45e"
-CLIENT_SECRET = dbutils.secrets.get(scope="databricksScope", key="svc-b-a1-d-930710-ana-aadappClientapi")
-AZURE_ENDPOINT = "https://dahiwade-openai-0397ab9d9c6b4f1fae9f4b4d81.cognitiveservices.azure.com/"
-
-# Databricks Configuration
-CATALOG_NAME = "bnlwe_ai_foundation_rag_dev"
-SCHEMA_NAME = "unvsg2__"
-TABLE_NAME = "mp3_transcripts"
-
-print(f"Will create and save to: {CATALOG_NAME}.{SCHEMA_NAME}.{TABLE_NAME}")
-
-
-
-# ==========================================
 # CELL 4: Simple DataFrame Functions
 # ==========================================
 
@@ -33,22 +6,39 @@ def create_simple_dataframe(mp3_file_path, transcript):
     """Create simple DataFrame with only filename and transcript"""
     filename = os.path.basename(mp3_file_path)
     
+    # Make sure filename is not empty and properly extracted
+    if not filename or filename == "":
+        filename = "unknown_file.mp3"
+    
+    print(f"Creating DataFrame with filename: {filename}")  # Debug line
+    
     df = pd.DataFrame({
-        'filename': [filename],
+        'file_name': [filename],
         'transcript': [transcript if transcript else "TRANSCRIPTION_FAILED"]
     })
+    
+    # Check DataFrame before returning
+    print(f"DataFrame created - file_name: {df['file_name'].iloc[0]}")
     
     return df
 
 def display_simple_dataframe(df):
     """Display clean DataFrame with full transcript"""
     spark = SparkSession.builder.getOrCreate()
+    
+    # Print pandas DataFrame first to verify data
+    print("Pandas DataFrame content:")
+    print(df)
+    
     spark_df = spark.createDataFrame(df)
     
+    # Verify Spark DataFrame
+    print("Spark DataFrame content:")
+    spark_df.show(truncate=False)
+    
     print("MP3 TRANSCRIPTION RESULTS")
-    print("=" * 100)
+    print("=" * 50)
     display(spark_df)
-    print("=" * 100)
     
     return spark_df
 
@@ -62,6 +52,10 @@ def create_catalog_and_save(spark_df):
         
         full_table_name = f"{CATALOG_NAME}.{SCHEMA_NAME}.{TABLE_NAME}"
         
+        # Check DataFrame before saving
+        print("Data being saved:")
+        spark_df.show(truncate=False)
+        
         spark_df.write \
             .mode("append") \
             .option("mergeSchema", "true") \
@@ -70,68 +64,13 @@ def create_catalog_and_save(spark_df):
         print(f"Table saved: {full_table_name}")
         print(f"Records saved: {spark_df.count()}")
         
+        # Immediately verify what was saved
+        print("Verifying saved data:")
+        verification = spark.sql(f"SELECT * FROM {full_table_name} ORDER BY file_name DESC LIMIT 1")
+        verification.show(truncate=False)
+        
         return True
         
     except Exception as e:
         print(f"Catalog save error: {str(e)}")
         return False
-
-
-
-# ==========================================
-# CELL 5: Complete Pipeline
-# ==========================================
-
-def run_simple_pipeline(mp3_file_path):
-    """Simple pipeline: MP3 -> Transcript -> Simple DataFrame -> Catalog"""
-    
-    print("=" * 80)
-    print("MP3 TO TEXT TRANSCRIPTION PIPELINE")
-    print("=" * 80)
-    
-    # Step 1: Authentication
-    print("1. Testing authentication...")
-    if not get_access_token():
-        print("Authentication failed")
-        return None
-    
-    # Step 2: Transcription
-    print(f"\n2. Processing: {os.path.basename(mp3_file_path)}")
-    transcript = transcribe_mp3_memory_only(mp3_file_path)
-    
-    # Step 3: Create simple DataFrame
-    print("\n3. Creating DataFrame...")
-    pandas_df = create_simple_dataframe(mp3_file_path, transcript)
-    
-    # Step 4: Display results
-    print("\n4. Results:")
-    spark_df = display_simple_dataframe(pandas_df)
-    
-    # Step 5: Save to catalog
-    print("\n5. Saving to catalog...")
-    if create_catalog_and_save(spark_df):
-        print("Pipeline completed successfully!")
-    else:
-        print("Pipeline completed with save issues")
-    
-    print("=" * 80)
-    return spark_df
-
-
-
-# ==========================================
-# CELL 6: Main Execution
-# ==========================================
-
-# MP3 file path
-mp3_file = "/Workspace/Users/anuj.b.s@mughalvaren.com/sample-ppt/audio/presentation_script/1_user_say/mygov_1.mp3"
-
-# Run simple pipeline
-if mp3_file != "/path/to/your/audio.mp3":
-    df_result = run_simple_pipeline(mp3_file)
-else:
-    print("Please update mp3_file with your actual file path")
-    print("Example: mp3_file = '/Workspace/Shared/my_audio.mp3'")
-
-# Query saved data
-spark.sql(f"SELECT filename, transcript FROM {CATALOG_NAME}.{SCHEMA_NAME}.{TABLE_NAME}").show(truncate=False)
