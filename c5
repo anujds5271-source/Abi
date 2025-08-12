@@ -11,171 +11,19 @@ import pandas as pd
 from pyspark.sql import SparkSession
 
 # Azure Configuration
-TENANT_ID = "your-tenant-id"
-CLIENT_ID = "your-client-id"  
-CLIENT_SECRET = "your-client-secret"
-AZURE_ENDPOINT = "your-azure-endpoint"
+TENANT_ID = "1f656ea2-a5d8-4b93-8dc6-4fd7e59e0d5a"
+CLIENT_ID = "895f21a2-183c-4e35-80a3-e3c9de56e45e"
+CLIENT_SECRET = dbutils.secrets.get(scope="databricksScope", key="svc-b-a1-d-930710-ana-aadappClientapi")
+AZURE_ENDPOINT = "https://dahiwade-openai-0397ab9d9c6b4f1fae9f4b4d81.cognitiveservices.azure.com/"
 
-# Databricks Configuration - NEW CATALOG/SCHEMA
-CATALOG_NAME = "audio_processing_catalog"
-SCHEMA_NAME = "speech_to_text"
+# Databricks Configuration
+CATALOG_NAME = "bnlwe_ai_foundation_rag_dev"
+SCHEMA_NAME = "unvsg2__"
 TABLE_NAME = "mp3_transcripts"
 
 print(f"Will create and save to: {CATALOG_NAME}.{SCHEMA_NAME}.{TABLE_NAME}")
 
-# ==========================================
-# CELL 2: Authentication
-# ==========================================
 
-def get_access_token():
-    """Get Azure access token"""
-    try:
-        token_url = f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/token"
-        
-        payload = {
-            'grant_type': 'client_credentials',
-            'client_id': CLIENT_ID,
-            'client_secret': CLIENT_SECRET,
-            'scope': 'https://cognitiveservices.azure.com/.default'
-        }
-        
-        response = requests.post(token_url, data=payload)
-        
-        if response.status_code == 200:
-            print("Successfully obtained Azure access token")
-            return response.json()['access_token']
-        else:
-            print(f"Token error: {response.text}")
-            return None
-            
-    except Exception as e:
-        print(f"Auth error: {str(e)}")
-        return None
-
-# ==========================================
-# CELL 3: Complete Transcription Function
-# ==========================================
-
-def transcribe_mp3_memory_only(mp3_file_path):
-    """Complete MP3 transcription - your working method"""
-    if not os.path.exists(mp3_file_path):
-        print(f"File not found: {mp3_file_path}")
-        return None
-    
-    try:
-        print(f"Processing MP3: {mp3_file_path}")
-        
-        # Load MP3 with librosa
-        print("Loading MP3 into memory...")
-        audio_data, sample_rate = librosa.load(
-            mp3_file_path, 
-            sr=16000,
-            mono=True
-        )
-        
-        duration = len(audio_data) / sample_rate
-        print(f"Audio loaded: {duration:.1f} seconds")
-        
-        if duration < 1.0:
-            print("Audio too short")
-            return None
-        
-        # Get access token
-        access_token = get_access_token()
-        if not access_token:
-            print("Failed to get access token")
-            return None
-        
-        # Create speech config
-        speech_config = speechsdk.SpeechConfig(endpoint=AZURE_ENDPOINT)
-        speech_config.authorization_token = access_token
-        speech_config.speech_recognition_language = "en-US"
-        
-        # Create audio stream
-        print("Creating audio stream in memory...")
-        audio_int16 = (audio_data * 32767).astype(np.int16)
-        audio_bytes = audio_int16.tobytes()
-        
-        push_stream = speechsdk.audio.PushAudioInputStream()
-        audio_config = speechsdk.audio.AudioConfig(stream=push_stream)
-        
-        # Create recognizer
-        recognizer = speechsdk.SpeechRecognizer(
-            speech_config=speech_config,
-            audio_config=audio_config
-        )
-        
-        # Setup continuous recognition
-        transcribed_parts = []
-        recognition_done = False
-        
-        def handle_recognized(evt):
-            if evt.result.text.strip():
-                print(f"Recognized: {evt.result.text[:50]}...")
-                transcribed_parts.append(evt.result.text)
-        
-        def handle_session_stopped(evt):
-            nonlocal recognition_done
-            print("Recognition completed")
-            recognition_done = True
-        
-        def handle_canceled(evt):
-            nonlocal recognition_done
-            details = evt.result.cancellation_details
-            print(f"Recognition canceled: {details.reason}")
-            if details.error_details:
-                print(f"Error: {details.error_details}")
-            recognition_done = True
-        
-        # Connect events
-        recognizer.recognized.connect(handle_recognized)
-        recognizer.session_stopped.connect(handle_session_stopped)
-        recognizer.canceled.connect(handle_canceled)
-        
-        # Start recognition
-        print("Starting recognition...")
-        recognizer.start_continuous_recognition()
-        
-        # Stream audio data
-        chunk_size = 3200
-        bytes_sent = 0
-        
-        for i in range(0, len(audio_bytes), chunk_size):
-            chunk = audio_bytes[i:i + chunk_size]
-            push_stream.write(chunk)
-            bytes_sent += len(chunk)
-            
-            if i % (chunk_size * 10) == 0:
-                progress = (bytes_sent / len(audio_bytes)) * 100
-                print(f"Progress: {progress:.1f}%")
-        
-        push_stream.close()
-        
-        # Wait for completion
-        import time
-        timeout = max(30, duration + 10)
-        start_time = time.time()
-        
-        while not recognition_done and (time.time() - start_time) < timeout:
-            time.sleep(0.5)
-        
-        recognizer.stop_continuous_recognition()
-        
-        # Return result
-        full_transcript = " ".join(transcribed_parts).strip()
-        
-        if full_transcript:
-            print(f"Success! Transcript length: {len(full_transcript)} characters")
-            return full_transcript
-        else:
-            print("No speech detected")
-            return None
-            
-    except Exception as e:
-        print(f"Error: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return None
 
 # ==========================================
 # CELL 4: Simple DataFrame Functions
@@ -194,57 +42,41 @@ def create_simple_dataframe(mp3_file_path, transcript):
 
 def display_simple_dataframe(df):
     """Display clean DataFrame with full transcript"""
-    pd.set_option('display.max_columns', None)
-    pd.set_option('display.max_colwidth', None)
-    pd.set_option('display.width', None)
-    pd.set_option('display.expand_frame_repr', False)
+    spark = SparkSession.builder.getOrCreate()
+    spark_df = spark.createDataFrame(df)
     
     print("MP3 TRANSCRIPTION RESULTS")
     print("=" * 100)
-    print(df.to_string(index=False, justify='left'))
+    display(spark_df)
     print("=" * 100)
     
-    return df
+    return spark_df
 
-def create_catalog_and_save(df):
+def create_catalog_and_save(spark_df):
     """Create catalog and save simple table"""
     try:
         spark = SparkSession.builder.getOrCreate()
         
-        # Create catalog if not exists
-        try:
-            spark.sql(f"CREATE CATALOG IF NOT EXISTS {CATALOG_NAME}")
-            print(f"Catalog created: {CATALOG_NAME}")
-        except:
-            print(f"Using existing catalog: {CATALOG_NAME}")
+        spark.sql(f"USE CATALOG {CATALOG_NAME}")
+        spark.sql(f"USE SCHEMA {SCHEMA_NAME}")
         
-        # Create schema if not exists
-        try:
-            spark.sql(f"CREATE SCHEMA IF NOT EXISTS {CATALOG_NAME}.{SCHEMA_NAME}")
-            print(f"Schema created: {SCHEMA_NAME}")
-        except:
-            print(f"Using existing schema: {SCHEMA_NAME}")
-        
-        # Convert to Spark DataFrame
-        spark_df = spark.createDataFrame(df)
-        
-        # Full table name
         full_table_name = f"{CATALOG_NAME}.{SCHEMA_NAME}.{TABLE_NAME}"
         
-        # Save table
         spark_df.write \
             .mode("append") \
             .option("mergeSchema", "true") \
             .saveAsTable(full_table_name)
         
         print(f"Table saved: {full_table_name}")
-        print(f"Records saved: {len(df)}")
+        print(f"Records saved: {spark_df.count()}")
         
         return True
         
     except Exception as e:
         print(f"Catalog save error: {str(e)}")
         return False
+
+
 
 # ==========================================
 # CELL 5: Complete Pipeline
@@ -267,30 +99,32 @@ def run_simple_pipeline(mp3_file_path):
     print(f"\n2. Processing: {os.path.basename(mp3_file_path)}")
     transcript = transcribe_mp3_memory_only(mp3_file_path)
     
-    # Step 3: Create simple DataFrame (only filename and transcript)
+    # Step 3: Create simple DataFrame
     print("\n3. Creating DataFrame...")
-    df = create_simple_dataframe(mp3_file_path, transcript)
+    pandas_df = create_simple_dataframe(mp3_file_path, transcript)
     
     # Step 4: Display results
     print("\n4. Results:")
-    display_simple_dataframe(df)
+    spark_df = display_simple_dataframe(pandas_df)
     
     # Step 5: Save to catalog
     print("\n5. Saving to catalog...")
-    if create_catalog_and_save(df):
+    if create_catalog_and_save(spark_df):
         print("Pipeline completed successfully!")
     else:
         print("Pipeline completed with save issues")
     
     print("=" * 80)
-    return df
+    return spark_df
+
+
 
 # ==========================================
 # CELL 6: Main Execution
 # ==========================================
 
-# MP3 file path - TU YAHA APNA PATH DAAL
-mp3_file = "/path/to/your/audio.mp3"  # UPDATE THIS PATH
+# MP3 file path
+mp3_file = "/Workspace/Users/anuj.b.s@mughalvaren.com/sample-ppt/audio/presentation_script/1_user_say/mygov_1.mp3"
 
 # Run simple pipeline
 if mp3_file != "/path/to/your/audio.mp3":
@@ -299,5 +133,5 @@ else:
     print("Please update mp3_file with your actual file path")
     print("Example: mp3_file = '/Workspace/Shared/my_audio.mp3'")
 
-# Query saved data (only filename and transcript columns)
-# spark.sql(f"SELECT filename, transcript FROM {CATALOG_NAME}.{SCHEMA_NAME}.{TABLE_NAME}").show()
+# Query saved data
+spark.sql(f"SELECT filename, transcript FROM {CATALOG_NAME}.{SCHEMA_NAME}.{TABLE_NAME}").show(truncate=False)
