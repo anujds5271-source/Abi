@@ -1,47 +1,158 @@
-# ==========================================
-# CELL 4: Simple DataFrame Functions
-# ==========================================
+# =============================================================================
+# EXACT INTEGRATION STEPS FOR MP3 SUPPORT IN DRIVER FILE
+# =============================================================================
 
-def create_simple_dataframe(mp3_file_path, transcript):
-    """Create simple DataFrame with only filename and transcript"""
-    filename = os.path.basename(mp3_file_path)
-    
-    if not filename or filename == "":
-        filename = "unknown_file.mp3"
-    
-    df = pd.DataFrame({
-        'file_name': [filename],
-        'transcript': [transcript if transcript else "TRANSCRIPTION_FAILED"]
-    })
-    
-    return df
+# STEP 1: CELL #4 mein ye line ADD karo (after existing %run commands)
+# =============================================================================
 
-def display_simple_dataframe(df):
-    """Display clean DataFrame with full transcript"""
-    spark = SparkSession.builder.getOrCreate()
-    spark_df = spark.createDataFrame(df)
-    
-    display(spark_df)
-    
-    return spark_df
+%run "/Workspace/Users/nitin.balu-deore@unilever.com/pdfandimage_text/rag_genai/ingestion_scripts/silver_layer/document_parser"
 
-def create_catalog_and_save(spark_df):
-    """Create catalog and save simple table"""
-    try:
-        spark = SparkSession.builder.getOrCreate()
+%run "/Workspace/Users/nitin.balu-deore@unilever.com/pdfandimage_text/rag_genai/ingestion_scripts/generic_functions/generic_functions"
+
+# ADD THIS LINE - Replace with your actual audio extraction notebook path
+%run "/path/to/your/audio_extraction_notebook"
+
+# =============================================================================
+# STEP 2: CELL #9 mein MP3 condition ADD karo (line 151 ke baad, else se pehle)
+# =============================================================================
+
+# Your existing conditions:
+    elif filename.lower().endswith(".xlsx"):
+        # Excel processing code...
+        pass
         
-        spark.sql(f"USE CATALOG {CATALOG_NAME}")
-        spark.sql(f"USE SCHEMA {SCHEMA_NAME}")
+    # ADD MP3 CONDITION HERE - BEFORE the 'else' block
+    elif filename.lower().endswith(".mp3"):
+        print(f"Processing MP3 file: {filename}")
+        start_time = datetime.now()
         
-        full_table_name = f"{CATALOG_NAME}.{SCHEMA_NAME}.{TABLE_NAME}"
+        # Check if file is not empty
+        if os.path.getsize(os.path.join(adls_mnt_directory_path_formatted, filename)) > 0:
+            
+            # Call get_transcription function from audio extraction notebook
+            try:
+                mp3_file_path = os.path.join(adls_mnt_directory_path_formatted, filename)
+                transcript = get_transcription(mp3_file_path)
+                
+                if transcript and transcript.strip():
+                    # Create DataFrame with transcript
+                    file_name = os.path.basename(mp3_file_path)
+                    
+                    # Create pandas DataFrame first
+                    data = [{
+                        'file_path': mp3_file_path,
+                        'content': transcript,
+                        'audio_file_name': file_name,
+                        'transcript_length': len(transcript)
+                    }]
+                    
+                    mp3_pandas_df = pd.DataFrame(data)
+                    
+                    # Convert to Spark DataFrame
+                    mp3_spark_df = spark.createDataFrame(mp3_pandas_df)
+                    
+                    # Get empty silver schema and union (same as other file types)
+                    empty_silver_schema = get_empty_silver_table_schema()
+                    if empty_silver_schema["status_code"] == 200:
+                        mp3_spark_df = mp3_spark_df.unionByName(empty_silver_schema["dataframe"], allowMissingColumns=True)
+                        
+                        # Success - add to DataFrames list
+                        all_dfs.append(mp3_spark_df)
+                        end_time = datetime.now()
+                        
+                        # Log success
+                        log_metadata.append({
+                            "job_id": job_id,
+                            "run_id": run_id,
+                            "rag_app_name": rag_app_name_from_metadata_table,
+                            "rag_app_source_id": rag_app_source_id_from_metadata_table,
+                            "source_doc_path": os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
+                            "source_doc_name": filename,
+                            "target_stage": "silver layer",
+                            "target_path": rag_storage_acc_mount_point_from_metadata_table+silver_layer_target_path_from_metadata_table+"created_date="+str(datetime.now().year)+"-"+str(datetime.now().month)+"-"+str(datetime.now().day),
+                            "ingestion_status": "success",
+                            "start_time": start_time,
+                            "end_time": end_time
+                        })
+                    else:
+                        # Schema error
+                        end_time = datetime.now()
+                        log_metadata.append({
+                            "job_id": job_id,
+                            "run_id": run_id,
+                            "rag_app_name": rag_app_name_from_metadata_table,
+                            "rag_app_source_id": rag_app_source_id_from_metadata_table,
+                            "source_doc_path": os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
+                            "source_doc_name": filename,
+                            "target_stage": "silver layer",
+                            "target_path": rag_storage_acc_mount_point_from_metadata_table+silver_layer_target_path_from_metadata_table+"created_date="+str(datetime.now().year)+"-"+str(datetime.now().month)+"-"+str(datetime.now().day),
+                            "ingestion_status": "failure",
+                            "error_details": empty_silver_schema["status_details"],
+                            "start_time": start_time,
+                            "end_time": end_time
+                        })
+                else:
+                    # No transcript generated
+                    end_time = datetime.now()
+                    log_metadata.append({
+                        "job_id": job_id,
+                        "run_id": run_id,
+                        "rag_app_name": rag_app_name_from_metadata_table,
+                        "rag_app_source_id": rag_app_source_id_from_metadata_table,
+                        "source_doc_path": os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
+                        "source_doc_name": filename,
+                        "target_stage": "silver layer",
+                        "target_path": rag_storage_acc_mount_point_from_metadata_table+silver_layer_target_path_from_metadata_table+"created_date="+str(datetime.now().year)+"-"+str(datetime.now().month)+"-"+str(datetime.now().day),
+                        "ingestion_status": "failure",
+                        "error_details": "Failed to transcribe audio or no speech detected",
+                        "start_time": start_time,
+                        "end_time": end_time
+                    })
+                    
+            except Exception as e:
+                # Transcription error
+                end_time = datetime.now()
+                log_metadata.append({
+                    "job_id": job_id,
+                    "run_id": run_id,
+                    "rag_app_name": rag_app_name_from_metadata_table,
+                    "rag_app_source_id": rag_app_source_id_from_metadata_table,
+                    "source_doc_path": os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
+                    "source_doc_name": filename,
+                    "target_stage": "silver layer",
+                    "target_path": rag_storage_acc_mount_point_from_metadata_table+silver_layer_target_path_from_metadata_table+"created_date="+str(datetime.now().year)+"-"+str(datetime.now().month)+"-"+str(datetime.now().day),
+                    "ingestion_status": "failure",
+                    "error_details": str(e),
+                    "start_time": start_time,
+                    "end_time": end_time
+                })
         
-        spark_df.write \
-            .mode("append") \
-            .option("mergeSchema", "true") \
-            .saveAsTable(full_table_name)
-        
-        return True
-        
-    except Exception as e:
-        print(f"Error: {str(e)}")
-        return False
+    else:
+        # Existing else block for unsupported files
+        log_metadata.append({
+            "job_id": job_id,
+            "run_id": run_id,
+            # ... rest of your existing else block code
+        })
+
+# =============================================================================
+# SUMMARY OF CHANGES:
+# =============================================================================
+
+"""
+CELL #4: Add audio extraction notebook import (1 line)
+CELL #9: Add MP3 condition in main processing loop (around line 151, before 'else')
+
+That's it! Just 2 changes needed.
+
+RESULT: 
+- Driver will now process MP3 files
+- MP3 transcripts will go to same silver table as other documents
+- Same logging and error handling as other file types
+- MP3 files will be included in final DataFrame merge
+
+FILES SUPPORTED AFTER INTEGRATION:
+✅ PDF, DOCX, CSV, Images, HTML, PPTX, Excel + MP3
+"""
+
+print("Integration ready! Just add these 2 code blocks to your driver file.")
