@@ -1,158 +1,178 @@
-# =============================================================================
-# EXACT INTEGRATION STEPS FOR MP3 SUPPORT IN DRIVER FILE
-# =============================================================================
+# ============================================================================
+# STEP 1: ADD THESE INSTALLATIONS AT THE VERY TOP OF YOUR NOTEBOOK (CELL #1)
+# REPLACE YOUR EXISTING CELL #1 WITH THIS
+# ============================================================================
 
-# STEP 1: CELL #4 mein ye line ADD karo (after existing %run commands)
-# =============================================================================
+#1
+import os
+import pyspark.sql.functions as F
+from pyspark.sql.types import *
+import pandas as pd
+from pyspark.sql import SparkSession
+from pyspark.sql import Row
+from datetime import datetime
 
-%run "/Workspace/Users/nitin.balu-deore@unilever.com/pdfandimage_text/rag_genai/ingestion_scripts/silver_layer/document_parser"
+# AUDIO INTEGRATION: Install required packages for audio processing
+%pip install azure-cognitiveservices-speech
+%pip install pydub
+%pip install asyncio
+%pip install python-dotenv
 
-%run "/Workspace/Users/nitin.balu-deore@unilever.com/pdfandimage_text/rag_genai/ingestion_scripts/generic_functions/generic_functions"
+print("All audio dependencies installed successfully!")
 
-# ADD THIS LINE - Replace with your actual audio extraction notebook path
-%run "/path/to/your/audio_extraction_notebook"
+# ============================================================================
+# STEP 2: ADD THESE IMPORTS AFTER YOUR EXISTING %run COMMANDS (AFTER CELL #4)
+# ============================================================================
 
-# =============================================================================
-# STEP 2: CELL #9 mein MP3 condition ADD karo (line 151 ke baad, else se pehle)
-# =============================================================================
+# Add this after your existing %run commands
+# AUDIO INTEGRATION: Import audio processing modules
+import asyncio
+import subprocess
+import time
+from concurrent.futures import ThreadPoolExecutor
+from dotenv import load_dotenv
+from langchain_core.documents import Document
+from pydub import AudioSegment
+import threading
+import azure.cognitiveservices.speech as speechsdk
+from azure.identity import ClientSecretCredential
 
-# Your existing conditions:
-    elif filename.lower().endswith(".xlsx"):
-        # Excel processing code...
-        pass
+print("Audio modules imported successfully!")
+
+# ============================================================================
+# STEP 3: ADD AKSHAY'S FUNCTIONS DIRECTLY (INSTEAD OF %run)
+# ADD THIS AFTER YOUR IMPORTS, BEFORE CELL #5
+# ============================================================================
+
+# AUDIO INTEGRATION: Akshay's audio functions (copying directly instead of %run)
+
+def get_azure_speect_to_text_config(rag_azure_cognitive_services_end_point, databricks_app_tenantid, databricks_app_clientid, spn_client_secret):
+    """Get Azure Speech to Text configuration"""
+    credential = ClientSecretCredential(
+        tenant_id=databricks_app_tenantid,
+        client_id=databricks_app_clientid,
+        client_secret=spn_client_secret
+    )
+    token = credential.get_token("https://cognitiveservices.azure.com/.default").token
+    speech_config = speechsdk.SpeechConfig(endpoint=rag_azure_cognitive_services_end_point)
+    speech_config.authorization_token = token
+    return speech_config
+
+def transcripts_to_documents(transcripts, audio_path, volume_path_with_file_name):
+    """Convert transcripts to document format"""
+    print(f"Converting transcripts to documents for: {audio_path}")
+    audio_file_name = os.path.splitext(os.path.basename(audio_path))[0]
+    documents = []
+    for (start, end), text in transcripts:
+        doc = Document(
+            page_content=text,
+            metadata={
+                "start_second": start,
+                "end_second": end,
+                "type": "transcript",
+                "file_path": volume_path_with_file_name,
+            },
+        )
+        documents.append(doc)
+    return documents
+
+def transcribe_segment_sync(audio_path, start_sec, end_sec, workspace_audio_dir_path, speech_config):
+    """Transcribe a single audio segment"""
+    print(f"Transcribing segment: {start_sec}-{end_sec} seconds")
+    audio = AudioSegment.from_file(audio_path)
+    start_ms = int(start_sec * 1000)
+    end_ms = int(end_sec * 1000)
+    segment = audio[start_ms:end_ms]
+    segment_path = f"{workspace_audio_dir_path}/temp_{start_ms}_{end_ms}.wav"
+    segment.export(segment_path, format="wav")
+    
+    try:
+        audio_input_config = speechsdk.AudioConfig(filename=segment_path)
+        speech_recognizer = speechsdk.SpeechRecognizer(
+            speech_config=speech_config,
+            audio_config=audio_input_config
+        )
         
-    # ADD MP3 CONDITION HERE - BEFORE the 'else' block
-    elif filename.lower().endswith(".mp3"):
-        print(f"Processing MP3 file: {filename}")
-        start_time = datetime.now()
+        full_transcript = []
+        def handle_final_result(evt):
+            if evt.result.reason == speechsdk.ResultReason.RecognizedSpeech:
+                print(f"Recognized: {evt.result.text[:50]}...")
+                full_transcript.append(evt.result.text)
+            elif evt.result.reason == speechsdk.ResultReason.NoMatch:
+                print("No speech could be recognized")
         
-        # Check if file is not empty
-        if os.path.getsize(os.path.join(adls_mnt_directory_path_formatted, filename)) > 0:
+        done = threading.Event()
+        def stop_cb(evt):
+            print("Recognition finished.")
+            done.set()
+        
+        speech_recognizer.recognized.connect(handle_final_result)
+        speech_recognizer.session_stopped.connect(stop_cb)
+        speech_recognizer.canceled.connect(stop_cb)
+        
+        speech_recognizer.start_continuous_recognition()
+        done.wait()
+        speech_recognizer.stop_continuous_recognition()
+        
+        # Clean up segment file
+        try:
+            os.remove(segment_path)
+        except:
+            pass
             
-            # Call get_transcription function from audio extraction notebook
-            try:
-                mp3_file_path = os.path.join(adls_mnt_directory_path_formatted, filename)
-                transcript = get_transcription(mp3_file_path)
-                
-                if transcript and transcript.strip():
-                    # Create DataFrame with transcript
-                    file_name = os.path.basename(mp3_file_path)
-                    
-                    # Create pandas DataFrame first
-                    data = [{
-                        'file_path': mp3_file_path,
-                        'content': transcript,
-                        'audio_file_name': file_name,
-                        'transcript_length': len(transcript)
-                    }]
-                    
-                    mp3_pandas_df = pd.DataFrame(data)
-                    
-                    # Convert to Spark DataFrame
-                    mp3_spark_df = spark.createDataFrame(mp3_pandas_df)
-                    
-                    # Get empty silver schema and union (same as other file types)
-                    empty_silver_schema = get_empty_silver_table_schema()
-                    if empty_silver_schema["status_code"] == 200:
-                        mp3_spark_df = mp3_spark_df.unionByName(empty_silver_schema["dataframe"], allowMissingColumns=True)
-                        
-                        # Success - add to DataFrames list
-                        all_dfs.append(mp3_spark_df)
-                        end_time = datetime.now()
-                        
-                        # Log success
-                        log_metadata.append({
-                            "job_id": job_id,
-                            "run_id": run_id,
-                            "rag_app_name": rag_app_name_from_metadata_table,
-                            "rag_app_source_id": rag_app_source_id_from_metadata_table,
-                            "source_doc_path": os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
-                            "source_doc_name": filename,
-                            "target_stage": "silver layer",
-                            "target_path": rag_storage_acc_mount_point_from_metadata_table+silver_layer_target_path_from_metadata_table+"created_date="+str(datetime.now().year)+"-"+str(datetime.now().month)+"-"+str(datetime.now().day),
-                            "ingestion_status": "success",
-                            "start_time": start_time,
-                            "end_time": end_time
-                        })
-                    else:
-                        # Schema error
-                        end_time = datetime.now()
-                        log_metadata.append({
-                            "job_id": job_id,
-                            "run_id": run_id,
-                            "rag_app_name": rag_app_name_from_metadata_table,
-                            "rag_app_source_id": rag_app_source_id_from_metadata_table,
-                            "source_doc_path": os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
-                            "source_doc_name": filename,
-                            "target_stage": "silver layer",
-                            "target_path": rag_storage_acc_mount_point_from_metadata_table+silver_layer_target_path_from_metadata_table+"created_date="+str(datetime.now().year)+"-"+str(datetime.now().month)+"-"+str(datetime.now().day),
-                            "ingestion_status": "failure",
-                            "error_details": empty_silver_schema["status_details"],
-                            "start_time": start_time,
-                            "end_time": end_time
-                        })
-                else:
-                    # No transcript generated
-                    end_time = datetime.now()
-                    log_metadata.append({
-                        "job_id": job_id,
-                        "run_id": run_id,
-                        "rag_app_name": rag_app_name_from_metadata_table,
-                        "rag_app_source_id": rag_app_source_id_from_metadata_table,
-                        "source_doc_path": os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
-                        "source_doc_name": filename,
-                        "target_stage": "silver layer",
-                        "target_path": rag_storage_acc_mount_point_from_metadata_table+silver_layer_target_path_from_metadata_table+"created_date="+str(datetime.now().year)+"-"+str(datetime.now().month)+"-"+str(datetime.now().day),
-                        "ingestion_status": "failure",
-                        "error_details": "Failed to transcribe audio or no speech detected",
-                        "start_time": start_time,
-                        "end_time": end_time
-                    })
-                    
-            except Exception as e:
-                # Transcription error
-                end_time = datetime.now()
-                log_metadata.append({
-                    "job_id": job_id,
-                    "run_id": run_id,
-                    "rag_app_name": rag_app_name_from_metadata_table,
-                    "rag_app_source_id": rag_app_source_id_from_metadata_table,
-                    "source_doc_path": os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
-                    "source_doc_name": filename,
-                    "target_stage": "silver layer",
-                    "target_path": rag_storage_acc_mount_point_from_metadata_table+silver_layer_target_path_from_metadata_table+"created_date="+str(datetime.now().year)+"-"+str(datetime.now().month)+"-"+str(datetime.now().day),
-                    "ingestion_status": "failure",
-                    "error_details": str(e),
-                    "start_time": start_time,
-                    "end_time": end_time
-                })
-        
-    else:
-        # Existing else block for unsupported files
-        log_metadata.append({
-            "job_id": job_id,
-            "run_id": run_id,
-            # ... rest of your existing else block code
-        })
+        return " ".join(full_transcript)
+    except Exception as e:
+        print(f"Error transcribing segment: {str(e)}")
+        return ""
 
-# =============================================================================
-# SUMMARY OF CHANGES:
-# =============================================================================
+semaphore = asyncio.Semaphore(5)
 
-"""
-CELL #4: Add audio extraction notebook import (1 line)
-CELL #9: Add MP3 condition in main processing loop (around line 151, before 'else')
+async def transcribe_segment(audio_path, start_sec, end_sec, executor, workspace_audio_dir_path, speech_config):
+    """Async transcribe segment"""
+    async with semaphore:
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            executor,
+            transcribe_segment_sync,
+            audio_path,
+            start_sec,
+            end_sec,
+            workspace_audio_dir_path,
+            speech_config
+        )
+        return result
 
-That's it! Just 2 changes needed.
+async def transcribe_multiple_segments(audio_path, segments, workspace_audio_dir_path, speech_config):
+    """Transcribe multiple segments asynchronously"""
+    print(f"Transcribing {len(segments)} segments")
+    executor = ThreadPoolExecutor(max_workers=5)
+    tasks = [
+        transcribe_segment(audio_path, start, end, executor, workspace_audio_dir_path, speech_config) 
+        for start, end in segments
+    ]
+    transcripts = await asyncio.gather(*tasks)
+    return list(zip(segments, transcripts))
 
-RESULT: 
-- Driver will now process MP3 files
-- MP3 transcripts will go to same silver table as other documents
-- Same logging and error handling as other file types
-- MP3 files will be included in final DataFrame merge
+def get_transcripts(audio_path, segments, workspace_audio_dir_path, rag_azure_cognitive_services_end_point, databricks_app_tenantid, databricks_app_clientid, spn_client_secret):
+    """Main function to get transcripts from audio"""
+    print(f"Starting transcription for {len(segments)} segments")
+    start_time = time.perf_counter()
+    
+    speech_config = get_azure_speect_to_text_config(
+        rag_azure_cognitive_services_end_point, 
+        databricks_app_tenantid, 
+        databricks_app_clientid, 
+        spn_client_secret
+    )
+    
+    transcripts = asyncio.run(transcribe_multiple_segments(audio_path, segments, workspace_audio_dir_path, speech_config))
+    
+    end_time = time.perf_counter() - start_time
+    print(f"Transcription completed in {end_time:.2f} seconds")
+    return transcripts
 
-FILES SUPPORTED AFTER INTEGRATION:
-✅ PDF, DOCX, CSV, Images, HTML, PPTX, Excel + MP3
-"""
+print("Audio processing functions loaded successfully!")
 
-print("Integration ready! Just add these 2 code blocks to your driver file.")
+# ============================================================================
+# NOW YOUR EXISTING CELLS CONTINUE FROM CELL #5 ONWARDS
+# ============================================================================
