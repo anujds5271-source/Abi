@@ -1,178 +1,97 @@
 # ============================================================================
-# STEP 1: ADD THESE INSTALLATIONS AT THE VERY TOP OF YOUR NOTEBOOK (CELL #1)
-# REPLACE YOUR EXISTING CELL #1 WITH THIS
+# FIXED AUDIO FUNCTION - REPLACE YOUR EXISTING process_audio_file FUNCTION
 # ============================================================================
 
-#1
-import os
-import pyspark.sql.functions as F
-from pyspark.sql.types import *
-import pandas as pd
-from pyspark.sql import SparkSession
-from pyspark.sql import Row
-from datetime import datetime
-
-# AUDIO INTEGRATION: Install required packages for audio processing
-%pip install azure-cognitiveservices-speech
-%pip install pydub
-%pip install asyncio
-%pip install python-dotenv
-
-print("All audio dependencies installed successfully!")
-
-# ============================================================================
-# STEP 2: ADD THESE IMPORTS AFTER YOUR EXISTING %run COMMANDS (AFTER CELL #4)
-# ============================================================================
-
-# Add this after your existing %run commands
-# AUDIO INTEGRATION: Import audio processing modules
-import asyncio
-import subprocess
-import time
-from concurrent.futures import ThreadPoolExecutor
-from dotenv import load_dotenv
-from langchain_core.documents import Document
-from pydub import AudioSegment
-import threading
-import azure.cognitiveservices.speech as speechsdk
-from azure.identity import ClientSecretCredential
-
-print("Audio modules imported successfully!")
-
-# ============================================================================
-# STEP 3: ADD AKSHAY'S FUNCTIONS DIRECTLY (INSTEAD OF %run)
-# ADD THIS AFTER YOUR IMPORTS, BEFORE CELL #5
-# ============================================================================
-
-# AUDIO INTEGRATION: Akshay's audio functions (copying directly instead of %run)
-
-def get_azure_speect_to_text_config(rag_azure_cognitive_services_end_point, databricks_app_tenantid, databricks_app_clientid, spn_client_secret):
-    """Get Azure Speech to Text configuration"""
-    credential = ClientSecretCredential(
-        tenant_id=databricks_app_tenantid,
-        client_id=databricks_app_clientid,
-        client_secret=spn_client_secret
-    )
-    token = credential.get_token("https://cognitiveservices.azure.com/.default").token
-    speech_config = speechsdk.SpeechConfig(endpoint=rag_azure_cognitive_services_end_point)
-    speech_config.authorization_token = token
-    return speech_config
-
-def transcripts_to_documents(transcripts, audio_path, volume_path_with_file_name):
-    """Convert transcripts to document format"""
-    print(f"Converting transcripts to documents for: {audio_path}")
-    audio_file_name = os.path.splitext(os.path.basename(audio_path))[0]
-    documents = []
-    for (start, end), text in transcripts:
-        doc = Document(
-            page_content=text,
-            metadata={
-                "start_second": start,
-                "end_second": end,
-                "type": "transcript",
-                "file_path": volume_path_with_file_name,
-            },
-        )
-        documents.append(doc)
-    return documents
-
-def transcribe_segment_sync(audio_path, start_sec, end_sec, workspace_audio_dir_path, speech_config):
-    """Transcribe a single audio segment"""
-    print(f"Transcribing segment: {start_sec}-{end_sec} seconds")
-    audio = AudioSegment.from_file(audio_path)
-    start_ms = int(start_sec * 1000)
-    end_ms = int(end_sec * 1000)
-    segment = audio[start_ms:end_ms]
-    segment_path = f"{workspace_audio_dir_path}/temp_{start_ms}_{end_ms}.wav"
-    segment.export(segment_path, format="wav")
-    
+def process_audio_file(audio_file_path):
+    """
+    Simple function to process audio file and create DataFrame
+    FIXED: Using hardcoded Azure config values instead of metadata table
+    """
     try:
-        audio_input_config = speechsdk.AudioConfig(filename=segment_path)
-        speech_recognizer = speechsdk.SpeechRecognizer(
-            speech_config=speech_config,
-            audio_config=audio_input_config
+        print(f"Processing audio file: {audio_file_path}")
+        
+        # FIXED: Use hardcoded Azure config values (same as Akshay's code)
+        azure_endpoint = "https://bnlwe-ai04-d-930710-cognitive-01.cognitiveservices.azure.com/"
+        tenant_id = "f66fae02-5d36-495b-bfe0-78a6ff9f8e6e"
+        client_id = "898fc218-182c-4c53-8a31-e8f54c59ad59"
+        client_secret = dbutils.secrets.get('databrickskv01', 'svc-b-ai-d-930710-ina-aadprincipal')
+        
+        # Create temp directory for audio processing
+        workspace_audio_dir = "/tmp/audio_temp"
+        os.makedirs(workspace_audio_dir, exist_ok=True)
+        
+        # Get audio duration to create segments
+        from pydub import AudioSegment
+        audio = AudioSegment.from_file(audio_file_path)
+        duration_seconds = len(audio) / 1000
+        
+        # Create segments (5 minute chunks)
+        segments = []
+        segment_length = 300  # 5 minutes
+        
+        for start in range(0, int(duration_seconds), segment_length):
+            end = min(start + segment_length, duration_seconds)
+            segments.append((start, end))
+        
+        print(f"Created {len(segments)} segments for audio processing")
+        
+        # Call Akshay's get_transcripts function
+        transcripts = get_transcripts(
+            audio_file_path, 
+            segments, 
+            workspace_audio_dir,
+            azure_endpoint,
+            tenant_id,
+            client_id,
+            client_secret
         )
         
-        full_transcript = []
-        def handle_final_result(evt):
-            if evt.result.reason == speechsdk.ResultReason.RecognizedSpeech:
-                print(f"Recognized: {evt.result.text[:50]}...")
-                full_transcript.append(evt.result.text)
-            elif evt.result.reason == speechsdk.ResultReason.NoMatch:
-                print("No speech could be recognized")
+        # Convert transcripts to documents
+        documents = transcripts_to_documents(transcripts, audio_file_path, audio_file_path)
         
-        done = threading.Event()
-        def stop_cb(evt):
-            print("Recognition finished.")
-            done.set()
+        # Create DataFrame data
+        page_content = []
+        page_number = []
         
-        speech_recognizer.recognized.connect(handle_final_result)
-        speech_recognizer.session_stopped.connect(stop_cb)
-        speech_recognizer.canceled.connect(stop_cb)
+        for i, doc in enumerate(documents):
+            page_content.append(doc.page_content)
+            page_number.append(i + 1)
         
-        speech_recognizer.start_continuous_recognition()
-        done.wait()
-        speech_recognizer.stop_continuous_recognition()
+        file_path_list = [audio_file_path] * len(page_content)
         
-        # Clean up segment file
-        try:
-            os.remove(segment_path)
-        except:
-            pass
+        # Create pandas DataFrame
+        data_dict = {
+            'file_path': file_path_list, 
+            'content': page_content, 
+            'page_number': page_number
+        }
+        
+        df = pd.DataFrame(data_dict)
+        audio_spark_df = spark.createDataFrame(df)
+        
+        # Union with empty schema (same as other file types)
+        empty_silver_schema = get_empty_silver_table_schema()
+        if empty_silver_schema["status_code"] == 200:
+            audio_spark_df = audio_spark_df.unionByName(empty_silver_schema["dataframe"], allowMissingColumns=True)
             
-        return " ".join(full_transcript)
+            # Clean up temp files
+            import shutil
+            shutil.rmtree(workspace_audio_dir, ignore_errors=True)
+            
+            return {
+                "status_code": 200,
+                "status_details": "ok",
+                "dataframe": audio_spark_df
+            }
+        else:
+            return {
+                "status_code": 214,
+                "status_details": empty_silver_schema["status_details"]
+            }
+            
     except Exception as e:
-        print(f"Error transcribing segment: {str(e)}")
-        return ""
-
-semaphore = asyncio.Semaphore(5)
-
-async def transcribe_segment(audio_path, start_sec, end_sec, executor, workspace_audio_dir_path, speech_config):
-    """Async transcribe segment"""
-    async with semaphore:
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            executor,
-            transcribe_segment_sync,
-            audio_path,
-            start_sec,
-            end_sec,
-            workspace_audio_dir_path,
-            speech_config
-        )
-        return result
-
-async def transcribe_multiple_segments(audio_path, segments, workspace_audio_dir_path, speech_config):
-    """Transcribe multiple segments asynchronously"""
-    print(f"Transcribing {len(segments)} segments")
-    executor = ThreadPoolExecutor(max_workers=5)
-    tasks = [
-        transcribe_segment(audio_path, start, end, executor, workspace_audio_dir_path, speech_config) 
-        for start, end in segments
-    ]
-    transcripts = await asyncio.gather(*tasks)
-    return list(zip(segments, transcripts))
-
-def get_transcripts(audio_path, segments, workspace_audio_dir_path, rag_azure_cognitive_services_end_point, databricks_app_tenantid, databricks_app_clientid, spn_client_secret):
-    """Main function to get transcripts from audio"""
-    print(f"Starting transcription for {len(segments)} segments")
-    start_time = time.perf_counter()
-    
-    speech_config = get_azure_speect_to_text_config(
-        rag_azure_cognitive_services_end_point, 
-        databricks_app_tenantid, 
-        databricks_app_clientid, 
-        spn_client_secret
-    )
-    
-    transcripts = asyncio.run(transcribe_multiple_segments(audio_path, segments, workspace_audio_dir_path, speech_config))
-    
-    end_time = time.perf_counter() - start_time
-    print(f"Transcription completed in {end_time:.2f} seconds")
-    return transcripts
-
-print("Audio processing functions loaded successfully!")
-
-# ============================================================================
-# NOW YOUR EXISTING CELLS CONTINUE FROM CELL #5 ONWARDS
-# ============================================================================
+        print(f"Error in audio processing: {str(e)}")
+        return {
+            "status_code": 214,
+            "status_details": str(e)
+        }
