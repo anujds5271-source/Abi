@@ -477,3 +477,104 @@ print("✅ PIPELINE EXECUTION COMPLETE!")
 # WHERE file_path LIKE '%.mp3' 
 # ORDER BY created_date DESC 
 # LIMIT 5
+
+
+
+
+
+
+#cell 18 
+# Find where to put MP3 files
+print("Put your MP3 files here:")
+print(adls_mnt_directory_path_from_metadata_table)
+
+import os
+if os.path.exists(adls_mnt_directory_path_from_metadata_table):
+    print("Directory exists!")
+    files = os.listdir(adls_mnt_directory_path_from_metadata_table)
+    print(f"Files found: {len(files)}")
+    for file in files:
+        print(f"  - {file}")
+else:
+    print("Directory does not exist")
+
+
+
+
+
+# Cell 19: Audio Transcript Display and Verification
+if 'running_df' in locals():
+    try:
+        # Filter for MP3 files only
+        mp3_df = running_df.filter(F.lower(F.col("file_path")).contains(".mp3"))
+        mp3_count = mp3_df.count()
+        
+        if mp3_count > 0:
+            print(f"Found {mp3_count} MP3 files processed")
+            
+            # Display MP3 transcripts
+            mp3_df.select(
+                F.regexp_extract(F.col("file_path"), r'([^/]+\.mp3), 1).alias("filename"),
+                F.substring(F.col("content"), 1, 200).alias("transcript_preview"),
+                F.length(F.col("content")).alias("transcript_length")
+            ).show(truncate=False)
+            
+            # Show full transcript for first MP3 file
+            first_mp3 = mp3_df.first()
+            if first_mp3:
+                print(f"Full transcript for: {first_mp3['file_path']}")
+                print(first_mp3['content'])
+                
+        else:
+            print("No MP3 files found in processed data")
+            
+    except Exception as e:
+        print(f"Error displaying audio transcripts: {e}")
+else:
+    print("No processed data found")
+
+# Cell 20: Final Pipeline Summary
+total_files = len(log_metadata)
+success_count = sum(1 for log in log_metadata if log['ingestion_status'] == 'success')
+failure_count = total_files - success_count
+
+print(f"Total files processed: {total_files}")
+print(f"Successful: {success_count}")
+print(f"Failed: {failure_count}")
+print(f"DataFrames created: {len(all_dfs)}")
+
+# File type breakdown
+if log_metadata:
+    file_types = {}
+    
+    for log in log_metadata:
+        filename = log['source_doc_name']
+        if filename.lower().endswith('.mp3'):
+            file_type = 'MP3'
+        elif filename.lower().endswith('.pdf'):
+            file_type = 'PDF'
+        elif filename.lower().endswith('.docx'):
+            file_type = 'DOCX'
+        elif filename.lower().endswith(('.jpg', '.jpeg', '.png')):
+            file_type = 'Images'
+        elif filename.lower().endswith('.xlsx'):
+            file_type = 'Excel'
+        elif filename.lower().endswith('.pptx'):
+            file_type = 'PowerPoint'
+        elif filename.lower().endswith('.csv'):
+            file_type = 'CSV'
+        elif filename.lower().endswith(('.html', '.HTML')):
+            file_type = 'HTML'
+        else:
+            file_type = 'Other'
+            
+        file_types[file_type] = file_types.get(file_type, 0) + 1
+    
+    print("File type breakdown:")
+    for file_type, count in file_types.items():
+        print(f"   {file_type}: {count}")
+
+if 'running_df' in locals():
+    print(f"Final DataFrame rows: {running_df.count()}")
+print(f"Silver table: {table_name}")
+print("Pipeline execution complete")
