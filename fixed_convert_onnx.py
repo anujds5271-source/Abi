@@ -1,110 +1,181 @@
-# Cell 10.5: Simple Audio Transcription Function (Add before Cell 11)
-import azure.cognitiveservices.speech as speechsdk
-import requests
-import os
-
-def get_access_token():
-    """Get Azure access token"""
-    try:
-        token_url = f"https://login.microsoftonline.com/{databricks_app_tenantid_from_metadata_table}/oauth2/v2.0/token"
-        
-        payload = {
-            'grant_type': 'client_credentials',
-            'client_id': databricks_app_clientid_from_metadata_table,
-            'client_secret': spn_client_secret_from_dbx_secret,
-            'scope': 'https://cognitiveservices.azure.com/.default'
-        }
-        
-        response = requests.post(token_url, data=payload)
-        
-        if response.status_code == 200:
-            return response.json()['access_token']
-        else:
-            print(f"Token error: {response.text}")
-            return None
+# Cell 12: Main File Processing Loop with Updated MP3 Processing
+for filename in os.listdir(adls_mnt_directory_path_formatted):
+    print(f" ********* processing file: {filename} **************** ")
+    
+    if filename.lower().endswith(".pdf"):
+        # PDF processing (existing code same...)
+        start_time = datetime.now()
+        if os.path.getsize(os.path.join(adls_mnt_directory_path_formatted, filename)) > 0:
+            filename, documents = parse_pdf_from_document_intelligence(os.path.join(adls_mnt_directory_path_formatted, filename))
             
-    except Exception as e:
-        print(f"Auth error: {str(e)}")
-        return None
+            # Language detection and translation logic
+            language_translation_check_text = documents[0].page_content + documents[-1].page_content 
+            language_detection_response = azure_ai_service_language_detection(client, language_translation_check_text)
+            source_language_shorthand = language_detection_response["iso6391_name"]
 
-def transcribe_mp3_simple(mp3_file_path):
-    """Simple MP3 transcription using Azure Speech Services"""
-    try:
-        print(f"Processing MP3: {mp3_file_path}")
+            if source_language_shorthand != "en":
+                parse_pdf_response = prepare_pdf_df(filename, documents, translate=True, source_language_shorthand=source_language_shorthand)
+            else:
+                parse_pdf_response = prepare_pdf_df(filename, documents, translate=False, source_language_shorthand=None)
+
+            end_time = datetime.now()
+            if parse_pdf_response["status_code"] == 200:
+                parse_pdf_response["dataframe"] = parse_pdf_response["dataframe"].withColumn("page_number", F.col("page_number").cast(IntegerType()))
+                all_dfs.append(parse_pdf_response["dataframe"])
+                log_metadata.append({
+                    "job_id": job_id,
+                    "run_id": run_id,
+                    "rag_app_name": rag_app_name_from_metadata_table,
+                    "rag_app_source_id": rag_app_source_id_from_metadata_table,
+                    "source_doc_path": os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
+                    "source_doc_name": filename,
+                    "target_stage": "silver layer",
+                    "target_path": rag_storage_acc_mount_point_from_metadata_table + silver_layer_target_path_from_metadata_table + "created_date=" + str(datetime.now().year) + "-" + str(datetime.now().month) + "-" + str(datetime.now().day),
+                    "ingestion_status": "success",
+                    "start_time": start_time,
+                    "end_time": end_time
+                })
+            else:
+                log_metadata.append({
+                    "job_id": job_id,
+                    "run_id": run_id,
+                    "rag_app_name": rag_app_name_from_metadata_table,
+                    "rag_app_source_id": rag_app_source_id_from_metadata_table,
+                    "source_doc_path": os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
+                    "source_doc_name": filename,
+                    "target_stage": "silver layer",
+                    "target_path": rag_storage_acc_mount_point_from_metadata_table + silver_layer_target_path_from_metadata_table + "created_date=" + str(datetime.now().year) + "-" + str(datetime.now().month) + "-" + str(datetime.now().day),
+                    "ingestion_status": "failure",
+                    "error_details": parse_pdf_response["status_details"],
+                    "start_time": start_time,
+                    "end_time": end_time
+                })
+
+    elif filename.lower().endswith(".mp3"):
+        # MP3 processing - UPDATED WITH SIMPLE FUNCTION
+        print(f"Processing MP3 file: {filename}")
+        start_time = datetime.now()
         
-        # Get access token
-        access_token = get_access_token()
-        if not access_token:
-            print("Failed to get access token")
-            return None
-        
-        # Create speech config
-        speech_config = speechsdk.SpeechConfig(endpoint=rag_azure_cognitive_services_end_point_from_metadata_table)
-        speech_config.authorization_token = access_token
-        speech_config.speech_recognition_language = "en-US"
-        
-        # Create audio config directly from file
-        audio_config = speechsdk.audio.AudioConfig(filename=mp3_file_path)
-        
-        # Create recognizer
-        recognizer = speechsdk.SpeechRecognizer(
-            speech_config=speech_config,
-            audio_config=audio_config
-        )
-        
-        # Setup continuous recognition
-        transcribed_parts = []
-        recognition_done = False
-        
-        def handle_recognized(evt):
-            if evt.result.text.strip():
-                print(f"Recognized: {evt.result.text[:50]}...")
-                transcribed_parts.append(evt.result.text)
-        
-        def handle_session_stopped(evt):
-            nonlocal recognition_done
-            print("Recognition completed")
-            recognition_done = True
-        
-        def handle_canceled(evt):
-            nonlocal recognition_done
-            details = evt.result.cancellation_details
-            print(f"Recognition canceled: {details.reason}")
-            if details.error_details:
-                print(f"Error: {details.error_details}")
-            recognition_done = True
-        
-        # Connect events
-        recognizer.recognized.connect(handle_recognized)
-        recognizer.session_stopped.connect(handle_session_stopped)
-        recognizer.canceled.connect(handle_canceled)
-        
-        # Start recognition
-        print("Starting recognition...")
-        recognizer.start_continuous_recognition()
-        
-        # Wait for completion (simple wait)
-        import time
-        timeout = 300  # 5 minutes max
-        start_time = time.time()
-        
-        while not recognition_done and (time.time() - start_time) < timeout:
-            time.sleep(1)
-        
-        recognizer.stop_continuous_recognition()
-        
-        # Return result
-        full_transcript = " ".join(transcribed_parts).strip()
-        
-        if full_transcript:
-            print(f"Success! Transcript length: {len(full_transcript)} characters")
-            return full_transcript
+        if os.path.getsize(os.path.join(adls_mnt_directory_path_formatted, filename)) > 0:
+            try:
+                mp3_file_path = os.path.join(adls_mnt_directory_path_formatted, filename)
+                
+                # Use simple transcription function (NO librosa/numpy issues)
+                transcript = transcribe_mp3_simple(mp3_file_path)
+                
+                if transcript:
+                    # Create simple DataFrame with filename and transcript
+                    audio_data = [{
+                        "file_path": filename,
+                        "content": transcript,
+                        "row_number": None,
+                        "page_number": None,
+                        "sheet_name": None,
+                        "header": None,
+                        "footer": None
+                    }]
+                    
+                    audio_df = spark.createDataFrame(audio_data)
+                    all_dfs.append(audio_df)
+                    
+                    end_time = datetime.now()
+                    log_metadata.append({
+                        "job_id": job_id,
+                        "run_id": run_id,
+                        "rag_app_name": rag_app_name_from_metadata_table,
+                        "rag_app_source_id": rag_app_source_id_from_metadata_table,
+                        "source_doc_path": mp3_file_path,
+                        "source_doc_name": filename,
+                        "target_stage": "silver layer",
+                        "target_path": rag_storage_acc_mount_point_from_metadata_table + silver_layer_target_path_from_metadata_table + "created_date=" + str(datetime.now().year) + "-" + str(datetime.now().month) + "-" + str(datetime.now().day),
+                        "ingestion_status": "success",
+                        "start_time": start_time,
+                        "end_time": end_time
+                    })
+                    print(f"Successfully processed MP3: {filename}")
+                else:
+                    raise Exception("No transcription generated")
+                    
+            except Exception as e:
+                end_time = datetime.now()
+                print(f"Error processing MP3 {filename}: {str(e)}")
+                log_metadata.append({
+                    "job_id": job_id,
+                    "run_id": run_id,
+                    "rag_app_name": rag_app_name_from_metadata_table,
+                    "rag_app_source_id": rag_app_source_id_from_metadata_table,
+                    "source_doc_path": os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
+                    "source_doc_name": filename,
+                    "target_stage": "silver layer",
+                    "target_path": rag_storage_acc_mount_point_from_metadata_table + silver_layer_target_path_from_metadata_table + "created_date=" + str(datetime.now().year) + "-" + str(datetime.now().month) + "-" + str(datetime.now().day),
+                    "ingestion_status": "failure",
+                    "error_details": str(e),
+                    "start_time": start_time,
+                    "end_time": end_time
+                })
         else:
-            print("No speech detected")
-            return None
-            
-    except Exception as e:
-        print(f"Error in transcription: {str(e)}")
-        return None
+            print(f"MP3 file {filename} is empty or corrupt")
 
-print("✅ Simple audio transcription function loaded")
+    elif filename.lower().endswith(".docx"):
+        # DOCX processing (existing code same...)
+        start_time = datetime.now()
+        if os.path.getsize(os.path.join(adls_mnt_directory_path_formatted, filename)) > 0:
+            filename, documents = parse_word_or_image_from_document_intelligence(os.path.join(adls_mnt_directory_path_formatted, filename))
+            language_detection_response = azure_ai_service_language_detection(client, documents[0].page_content[:5000])
+            source_language_shorthand = language_detection_response["iso6391_name"]
+
+            if source_language_shorthand != "en":
+                parse_word_response = prepare_word_or_image_df(filename, documents, translate=True, source_language_shorthand=source_language_shorthand)
+            else:
+                parse_word_response = prepare_word_or_image_df(filename, documents, translate=False, source_language_shorthand=None)
+            
+            end_time = datetime.now()
+            if parse_word_response["status_code"] == 200:
+                all_dfs.append(parse_word_response["dataframe"])
+                log_metadata.append({
+                    "job_id": job_id,
+                    "run_id": run_id,
+                    "rag_app_name": rag_app_name_from_metadata_table,
+                    "rag_app_source_id": rag_app_source_id_from_metadata_table,
+                    "source_doc_path": os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
+                    "source_doc_name": filename,
+                    "target_stage": "silver layer",
+                    "target_path": rag_storage_acc_mount_point_from_metadata_table + silver_layer_target_path_from_metadata_table + "created_date=" + str(datetime.now().year) + "-" + str(datetime.now().month) + "-" + str(datetime.now().day),
+                    "ingestion_status": "success",
+                    "start_time": start_time,
+                    "end_time": end_time
+                })
+            else:
+                log_metadata.append({
+                    "job_id": job_id,
+                    "run_id": run_id,
+                    "rag_app_name": rag_app_name_from_metadata_table,
+                    "rag_app_source_id": rag_app_source_id_from_metadata_table,
+                    "source_doc_path": os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
+                    "source_doc_name": filename,
+                    "target_stage": "silver layer",
+                    "target_path": rag_storage_acc_mount_point_from_metadata_table + silver_layer_target_path_from_metadata_table + "created_date=" + str(datetime.now().year) + "-" + str(datetime.now().month) + "-" + str(datetime.now().day),
+                    "ingestion_status": "failure",
+                    "error_details": parse_word_response["status_details"],
+                    "start_time": start_time,
+                    "end_time": end_time
+                })
+
+    # Add other file types (CSV, Images, HTML, PPTX, XLSX) here if needed...
+    
+    else:
+        # Unsupported file type
+        log_metadata.append({
+            "job_id": job_id,
+            "run_id": run_id,
+            "rag_app_name": rag_app_name_from_metadata_table,
+            "rag_app_source_id": rag_app_source_id_from_metadata_table,
+            "source_doc_path": os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
+            "source_doc_name": filename,
+            "target_stage": "silver layer",
+            "target_path": adls_mnt_directory_path_from_metadata_table,
+            "ingestion_status": "failure",
+            "error_details": "file not supported",
+        })
+
+print(f"Processing completed. Total DataFrames created: {len(all_dfs)}")
