@@ -1,4 +1,4 @@
-#9
+# Cell 11: Import Required Functions and Initialize Processing
 from datetime import datetime
 
 # file format level, save all dataframes
@@ -9,390 +9,473 @@ adls_mnt_directory_path_formatted = adls_mnt_directory_path_from_metadata_table
 # save all logs for metatable purpose
 log_metadata = []
 
-# adls_mnt_directory_path_formatted ="/Volumes/bnlwe_ai_foundation_rag_dev/innoflex_bnw_hr/akshay/french_all_formats/"
-
 client = authenticate_text_analytics_client()
 
 translate_supported_languages = text_translator.get_languages()
 translate_supported_languages.keys()
 list_of_translation_supported_languages = list(translate_supported_languages['translation'].keys())
-print(list_of_translation_supported_languages)
+print(f"Supported translation languages: {len(list_of_translation_supported_languages)} languages")
 
+# Cell 12: Main File Processing Loop with All File Types Including MP3
 for filename in os.listdir(adls_mnt_directory_path_formatted):
     print(f" ********* processing file: {filename} **************** ")
+    
     if filename.lower().endswith(".pdf"):
-        # print(os.path.join(adls_mnt_directory_path_formatted, filename))
+        # PDF processing
         start_time = datetime.now()
-
-        # parse content from DI
-        # shub - check if the file is corrupt before parsing
         if os.path.getsize(os.path.join(adls_mnt_directory_path_formatted, filename)) > 0:
             filename, documents = parse_pdf_from_document_intelligence(os.path.join(adls_mnt_directory_path_formatted, filename))
-
-            # print(f"documents: {documents}")
-            ###########
-
-            # find out language from first and last page
+            
+            # Language detection and translation
             language_translation_check_text = documents[0].page_content + documents[-1].page_content 
             language_detection_response = azure_ai_service_language_detection(client, language_translation_check_text)
-            # print(language_detection_response)
-            source_language_shorthand = language_detection_response["iso6391_name"] # fr
-            # source_language_fullname = language_detection_response["language"]
+            source_language_shorthand = language_detection_response["iso6391_name"]
 
-            # based on detected language, call translaion
             if source_language_shorthand != "en":
-                # print("call prepare_pdf_df")
-                parse_pdf_response = prepare_pdf_df(filename, documents, translate=True, source_language_shorthand = source_language_shorthand)
-            
+                parse_pdf_response = prepare_pdf_df(filename, documents, translate=True, source_language_shorthand=source_language_shorthand)
             else:
-                parse_pdf_response = prepare_pdf_df(filename, documents, translate=False, source_language_shorthand = None)
+                parse_pdf_response = prepare_pdf_df(filename, documents, translate=False, source_language_shorthand=None)
 
-
-            ###########        parse_pdf_response = prepare_pdf_df(filename, documents)
             end_time = datetime.now()
             if parse_pdf_response["status_code"] == 200:
-                parse_pdf_response["dataframe"] = parse_pdf_response["dataframe"].withColumn("page_number",F.col("page_number").cast(IntegerType()))
+                parse_pdf_response["dataframe"] = parse_pdf_response["dataframe"].withColumn("page_number", F.col("page_number").cast(IntegerType()))
                 all_dfs.append(parse_pdf_response["dataframe"])
                 log_metadata.append({
                     "job_id": job_id,
                     "run_id": run_id,
-                    "rag_app_name" : rag_app_name_from_metadata_table,
-                    "rag_app_source_id" : rag_app_source_id_from_metadata_table,
-                    "source_doc_path" : os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
-                    "source_doc_name" : filename,
-                    "target_stage" : "silver layer",
-                    "target_path": rag_storage_acc_mount_point_from_metadata_table+silver_layer_target_path_from_metadata_table+"created_date="+str(datetime.now().year)+"-"+str(datetime.now().month)+"-"+str(datetime.now().day),
+                    "rag_app_name": rag_app_name_from_metadata_table,
+                    "rag_app_source_id": rag_app_source_id_from_metadata_table,
+                    "source_doc_path": os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
+                    "source_doc_name": filename,
+                    "target_stage": "silver layer",
+                    "target_path": rag_storage_acc_mount_point_from_metadata_table + silver_layer_target_path_from_metadata_table + "created_date=" + str(datetime.now().year) + "-" + str(datetime.now().month) + "-" + str(datetime.now().day),
                     "ingestion_status": "success",
-                    "start_time" : start_time,
-                    "end_time" : end_time
-                    })
+                    "start_time": start_time,
+                    "end_time": end_time
+                })
             else:
                 log_metadata.append({
                     "job_id": job_id,
                     "run_id": run_id,
-                    "rag_app_name" : rag_app_name_from_metadata_table,
-                    "rag_app_source_id" : rag_app_source_id_from_metadata_table,
-                    "source_doc_path" : os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
-                    "source_doc_name" : filename,
-                    "target_stage" : "silver layer",
-                    "target_path": rag_storage_acc_mount_point_from_metadata_table+silver_layer_target_path_from_metadata_table+"created_date="+str(datetime.now().year)+"-"+str(datetime.now().month)+"-"+str(datetime.now().day),
+                    "rag_app_name": rag_app_name_from_metadata_table,
+                    "rag_app_source_id": rag_app_source_id_from_metadata_table,
+                    "source_doc_path": os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
+                    "source_doc_name": filename,
+                    "target_stage": "silver layer",
+                    "target_path": rag_storage_acc_mount_point_from_metadata_table + silver_layer_target_path_from_metadata_table + "created_date=" + str(datetime.now().year) + "-" + str(datetime.now().month) + "-" + str(datetime.now().day),
                     "ingestion_status": "failure",
                     "error_details": parse_pdf_response["status_details"],
-                    "start_time" : start_time,
-                    "end_time" : end_time
+                    "start_time": start_time,
+                    "end_time": end_time
                 })
+
     elif filename.lower().endswith(".docx"):
-        # print(os.path.join(adls_mnt_directory_path_formatted, filename))
+        # DOCX processing
         start_time = datetime.now()
-        # shub - check if the file is corrupt before parsing
         if os.path.getsize(os.path.join(adls_mnt_directory_path_formatted, filename)) > 0:
             filename, documents = parse_word_or_image_from_document_intelligence(os.path.join(adls_mnt_directory_path_formatted, filename))
-            # find out language from few begining text
-            # limit 5k because azure service can only process 5120 charac at a time
             language_detection_response = azure_ai_service_language_detection(client, documents[0].page_content[:5000])
-            # print(language_detection_response)
             source_language_shorthand = language_detection_response["iso6391_name"]
 
-            # based on detected language, call translaion
             if source_language_shorthand != "en":
-                parse_word_response = prepare_word_or_image_df(filename, documents, translate=True, source_language_shorthand = source_language_shorthand)
+                parse_word_response = prepare_word_or_image_df(filename, documents, translate=True, source_language_shorthand=source_language_shorthand)
             else:
-                parse_word_response = prepare_word_or_image_df(filename, documents, translate=False, source_language_shorthand = None)
+                parse_word_response = prepare_word_or_image_df(filename, documents, translate=False, source_language_shorthand=None)
+            
             end_time = datetime.now()
             if parse_word_response["status_code"] == 200:
                 all_dfs.append(parse_word_response["dataframe"])
                 log_metadata.append({
                     "job_id": job_id,
                     "run_id": run_id,
-                    "rag_app_name" : rag_app_name_from_metadata_table,
-                    "rag_app_source_id" : rag_app_source_id_from_metadata_table,
-                    "source_doc_path" : os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
-                    "source_doc_name" : filename,
-                    "target_stage" : "silver layer",
-                    "target_path": rag_storage_acc_mount_point_from_metadata_table+silver_layer_target_path_from_metadata_table+"created_date="+str(datetime.now().year)+"-"+str(datetime.now().month)+"-"+str(datetime.now().day),
+                    "rag_app_name": rag_app_name_from_metadata_table,
+                    "rag_app_source_id": rag_app_source_id_from_metadata_table,
+                    "source_doc_path": os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
+                    "source_doc_name": filename,
+                    "target_stage": "silver layer",
+                    "target_path": rag_storage_acc_mount_point_from_metadata_table + silver_layer_target_path_from_metadata_table + "created_date=" + str(datetime.now().year) + "-" + str(datetime.now().month) + "-" + str(datetime.now().day),
                     "ingestion_status": "success",
-                    "start_time" : start_time,
-                    "end_time" : end_time
-                    })
+                    "start_time": start_time,
+                    "end_time": end_time
+                })
             else:
                 log_metadata.append({
                     "job_id": job_id,
                     "run_id": run_id,
-                    "rag_app_name" : rag_app_name_from_metadata_table,
-                    "rag_app_source_id" : rag_app_source_id_from_metadata_table,
-                    "source_doc_path" : os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
-                    "source_doc_name" : filename,
-                    "target_stage" : "silver layer",
-                    "target_path": rag_storage_acc_mount_point_from_metadata_table+silver_layer_target_path_from_metadata_table+"created_date="+str(datetime.now().year)+"-"+str(datetime.now().month)+"-"+str(datetime.now().day),
+                    "rag_app_name": rag_app_name_from_metadata_table,
+                    "rag_app_source_id": rag_app_source_id_from_metadata_table,
+                    "source_doc_path": os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
+                    "source_doc_name": filename,
+                    "target_stage": "silver layer",
+                    "target_path": rag_storage_acc_mount_point_from_metadata_table + silver_layer_target_path_from_metadata_table + "created_date=" + str(datetime.now().year) + "-" + str(datetime.now().month) + "-" + str(datetime.now().day),
                     "ingestion_status": "failure",
                     "error_details": parse_word_response["status_details"],
-                    "start_time" : start_time,
-                    "end_time" : end_time
+                    "start_time": start_time,
+                    "end_time": end_time
                 })
-    elif filename.lower().endswith(".csv"):
-        # print(os.path.join(adls_mnt_directory_path_formatted, filename))
+
+    elif filename.lower().endswith(".mp3"):
+        # MP3 processing - NEW ADDITION
+        print(f"Processing MP3 file: {filename}")
         start_time = datetime.now()
-        # shub - check if the file is corrupt before parsing
+        
+        if os.path.getsize(os.path.join(adls_mnt_directory_path_formatted, filename)) > 0:
+            try:
+                mp3_file_path = os.path.join(adls_mnt_directory_path_formatted, filename)
+                
+                # Use simple transcription function (you need to implement this)
+                transcript = transcribe_mp3_memory_only(mp3_file_path)
+                
+                if transcript:
+                    # Create simple DataFrame with filename and transcript
+                    audio_data = [{
+                        "file_path": filename,
+                        "content": transcript,
+                        "row_number": None,
+                        "page_number": None,
+                        "sheet_name": None,
+                        "header": None,
+                        "footer": None
+                    }]
+                    
+                    audio_df = spark.createDataFrame(audio_data)
+                    all_dfs.append(audio_df)
+                    
+                    end_time = datetime.now()
+                    log_metadata.append({
+                        "job_id": job_id,
+                        "run_id": run_id,
+                        "rag_app_name": rag_app_name_from_metadata_table,
+                        "rag_app_source_id": rag_app_source_id_from_metadata_table,
+                        "source_doc_path": mp3_file_path,
+                        "source_doc_name": filename,
+                        "target_stage": "silver layer",
+                        "target_path": rag_storage_acc_mount_point_from_metadata_table + silver_layer_target_path_from_metadata_table + "created_date=" + str(datetime.now().year) + "-" + str(datetime.now().month) + "-" + str(datetime.now().day),
+                        "ingestion_status": "success",
+                        "start_time": start_time,
+                        "end_time": end_time
+                    })
+                    print(f"Successfully processed MP3: {filename}")
+                else:
+                    raise Exception("No transcription generated")
+                    
+            except Exception as e:
+                end_time = datetime.now()
+                print(f"Error processing MP3 {filename}: {str(e)}")
+                log_metadata.append({
+                    "job_id": job_id,
+                    "run_id": run_id,
+                    "rag_app_name": rag_app_name_from_metadata_table,
+                    "rag_app_source_id": rag_app_source_id_from_metadata_table,
+                    "source_doc_path": os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
+                    "source_doc_name": filename,
+                    "target_stage": "silver layer",
+                    "target_path": rag_storage_acc_mount_point_from_metadata_table + silver_layer_target_path_from_metadata_table + "created_date=" + str(datetime.now().year) + "-" + str(datetime.now().month) + "-" + str(datetime.now().day),
+                    "ingestion_status": "failure",
+                    "error_details": str(e),
+                    "start_time": start_time,
+                    "end_time": end_time
+                })
+        else:
+            print(f"MP3 file {filename} is empty or corrupt")
+
+    elif filename.lower().endswith(".csv"):
+        # CSV processing
+        start_time = datetime.now()
         if os.path.getsize(os.path.join(adls_mnt_directory_path_formatted, filename)) > 0:
             parse_csv_response = csv_parser(os.path.join(adls_mnt_directory_path_formatted, filename))
             end_time = datetime.now()
             if parse_csv_response["status_code"] == 200:
-                parse_csv_response["dataframe"] = parse_csv_response["dataframe"].withColumn("row_number",F.col("row_number").cast(IntegerType()))
+                parse_csv_response["dataframe"] = parse_csv_response["dataframe"].withColumn("row_number", F.col("row_number").cast(IntegerType()))
                 all_dfs.append(parse_csv_response["dataframe"])
                 log_metadata.append({
                     "job_id": job_id,
                     "run_id": run_id,
-                    "rag_app_name" : rag_app_name_from_metadata_table,
-                    "rag_app_source_id" : rag_app_source_id_from_metadata_table,
-                    "source_doc_path" : os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
-                    "source_doc_name" : filename,
-                    "target_stage" : "silver layer",
-                    "target_path": rag_storage_acc_mount_point_from_metadata_table+silver_layer_target_path_from_metadata_table+"created_date="+str(datetime.now().year)+"-"+str(datetime.now().month)+"-"+str(datetime.now().day),
+                    "rag_app_name": rag_app_name_from_metadata_table,
+                    "rag_app_source_id": rag_app_source_id_from_metadata_table,
+                    "source_doc_path": os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
+                    "source_doc_name": filename,
+                    "target_stage": "silver layer",
+                    "target_path": rag_storage_acc_mount_point_from_metadata_table + silver_layer_target_path_from_metadata_table + "created_date=" + str(datetime.now().year) + "-" + str(datetime.now().month) + "-" + str(datetime.now().day),
                     "ingestion_status": "success",
-                    "start_time" : start_time,
-                    "end_time" : end_time
+                    "start_time": start_time,
+                    "end_time": end_time
                 })
             else:
                 log_metadata.append({
                     "job_id": job_id,
                     "run_id": run_id,
-                    "rag_app_name" : rag_app_name_from_metadata_table,
-                    "rag_app_source_id" : rag_app_source_id_from_metadata_table,
-                    "source_doc_path" : os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
-                    "source_doc_name" : filename,
-                    "target_stage" : "silver layer",
-                    "target_path": rag_storage_acc_mount_point_from_metadata_table+silver_layer_target_path_from_metadata_table+"created_date="+str(datetime.now().year)+"-"+str(datetime.now().month)+"-"+str(datetime.now().day),
+                    "rag_app_name": rag_app_name_from_metadata_table,
+                    "rag_app_source_id": rag_app_source_id_from_metadata_table,
+                    "source_doc_path": os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
+                    "source_doc_name": filename,
+                    "target_stage": "silver layer",
+                    "target_path": rag_storage_acc_mount_point_from_metadata_table + silver_layer_target_path_from_metadata_table + "created_date=" + str(datetime.now().year) + "-" + str(datetime.now().month) + "-" + str(datetime.now().day),
                     "ingestion_status": "failure",
                     "error_details": parse_csv_response["status_details"],
-                    "start_time" : start_time,
-                    "end_time" : end_time
+                    "start_time": start_time,
+                    "end_time": end_time
                 })
+
     elif filename.lower().endswith((".jpg", ".jpeg", ".png")):
-        # print(os.path.join(adls_mnt_directory_path_formatted, filename))
+        # Image processing
         start_time = datetime.now()
-        # shub - check if the file is corrupt before parsing
         if os.path.getsize(os.path.join(adls_mnt_directory_path_formatted, filename)) > 0:
             parse_image_response = image_parser(os.path.join(adls_mnt_directory_path_formatted, filename))
             end_time = datetime.now()
             if parse_image_response["status_code"] == 200:
-                # parse_image_response["dataframe"] = parse_image_response["dataframe"].withColumn("row_number",F.col("row_number").cast(IntegerType()))
-                display(parse_image_response["dataframe"])
                 all_dfs.append(parse_image_response["dataframe"])
                 log_metadata.append({
                     "job_id": job_id,
                     "run_id": run_id,
-                    "rag_app_name" : rag_app_name_from_metadata_table,
-                    "rag_app_source_id" : rag_app_source_id_from_metadata_table,
-                    "source_doc_path" : os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
-                    "source_doc_name" : filename,
-                    "target_stage" : "silver layer",
-                    "target_path": rag_storage_acc_mount_point_from_metadata_table+silver_layer_target_path_from_metadata_table+"created_date="+str(datetime.now().year)+"-"+str(datetime.now().month)+"-"+str(datetime.now().day),
+                    "rag_app_name": rag_app_name_from_metadata_table,
+                    "rag_app_source_id": rag_app_source_id_from_metadata_table,
+                    "source_doc_path": os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
+                    "source_doc_name": filename,
+                    "target_stage": "silver layer",
+                    "target_path": rag_storage_acc_mount_point_from_metadata_table + silver_layer_target_path_from_metadata_table + "created_date=" + str(datetime.now().year) + "-" + str(datetime.now().month) + "-" + str(datetime.now().day),
                     "ingestion_status": "success",
-                    "start_time" : start_time,
-                    "end_time" : end_time
+                    "start_time": start_time,
+                    "end_time": end_time
                 })
             else:
                 log_metadata.append({
                     "job_id": job_id,
                     "run_id": run_id,
-                    "rag_app_name" : rag_app_name_from_metadata_table,
-                    "rag_app_source_id" : rag_app_source_id_from_metadata_table,
-                    "source_doc_path" : os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
-                    "source_doc_name" :filename,
-                    "target_stage" : "silver layer",
-                    "target_path": rag_storage_acc_mount_point_from_metadata_table+silver_layer_target_path_from_metadata_table+"created_date="+str(datetime.now().year)+"-"+str(datetime.now().month)+"-"+str(datetime.now().day),
+                    "rag_app_name": rag_app_name_from_metadata_table,
+                    "rag_app_source_id": rag_app_source_id_from_metadata_table,
+                    "source_doc_path": os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
+                    "source_doc_name": filename,
+                    "target_stage": "silver layer",
+                    "target_path": rag_storage_acc_mount_point_from_metadata_table + silver_layer_target_path_from_metadata_table + "created_date=" + str(datetime.now().year) + "-" + str(datetime.now().month) + "-" + str(datetime.now().day),
                     "ingestion_status": "failure",
                     "error_details": parse_image_response["status_details"],
-                    "start_time" : start_time,
-                    "end_time" : end_time
+                    "start_time": start_time,
+                    "end_time": end_time
                 })
+
     elif filename.lower().endswith((".html", ".HTML")):
-        # print(os.path.join(adls_mnt_directory_path_formatted, filename))
-        # print("html files are present")
+        # HTML processing
         start_time = datetime.now()
-        # shub - check if the file is corrupt before parsing
         if os.path.getsize(os.path.join(adls_mnt_directory_path_formatted, filename)) > 0:
-            parse_html_response = process_html_files(os.path.join(adls_mnt_directory_path_formatted, filename),translate=True)
+            parse_html_response = process_html_files(os.path.join(adls_mnt_directory_path_formatted, filename), translate=True)
             end_time = datetime.now()
             if parse_html_response["status_code"] == 200:
-                # parse_html_response["dataframe"] = parse_html_response["dataframe"].withColumn("row_number",F.col("row_number").cast(IntegerType()))
                 all_dfs.append(parse_html_response["dataframe"])
                 log_metadata.append({
                     "job_id": job_id,
                     "run_id": run_id,
-                    "rag_app_name" : rag_app_name_from_metadata_table,
-                    "rag_app_source_id" : rag_app_source_id_from_metadata_table,
-                    "source_doc_path" : os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
-                    "source_doc_name" : filename,
-                    "target_stage" : "silver layer",
-                    "target_path": rag_storage_acc_mount_point_from_metadata_table+silver_layer_target_path_from_metadata_table+"created_date="+str(datetime.now().year)+"-"+str(datetime.now().month)+"-"+str(datetime.now().day),
+                    "rag_app_name": rag_app_name_from_metadata_table,
+                    "rag_app_source_id": rag_app_source_id_from_metadata_table,
+                    "source_doc_path": os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
+                    "source_doc_name": filename,
+                    "target_stage": "silver layer",
+                    "target_path": rag_storage_acc_mount_point_from_metadata_table + silver_layer_target_path_from_metadata_table + "created_date=" + str(datetime.now().year) + "-" + str(datetime.now().month) + "-" + str(datetime.now().day),
                     "ingestion_status": "success",
-                    "start_time" : start_time,
-                    "end_time" : end_time
+                    "start_time": start_time,
+                    "end_time": end_time
                 })
             else:
-
-                # print(parse_html_response["status_details"])
                 log_metadata.append({
                     "job_id": job_id,
                     "run_id": run_id,
-                    "rag_app_name" : rag_app_name_from_metadata_table,
-                    "rag_app_source_id" : rag_app_source_id_from_metadata_table,
-                    "source_doc_path" : os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
-                    "source_doc_name" : filename,
-                    "target_stage" : "silver layer",
-                    "target_path": rag_storage_acc_mount_point_from_metadata_table+silver_layer_target_path_from_metadata_table+"created_date="+str(datetime.now().year)+"-"+str(datetime.now().month)+"-"+str(datetime.now().day),
+                    "rag_app_name": rag_app_name_from_metadata_table,
+                    "rag_app_source_id": rag_app_source_id_from_metadata_table,
+                    "source_doc_path": os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
+                    "source_doc_name": filename,
+                    "target_stage": "silver layer",
+                    "target_path": rag_storage_acc_mount_point_from_metadata_table + silver_layer_target_path_from_metadata_table + "created_date=" + str(datetime.now().year) + "-" + str(datetime.now().month) + "-" + str(datetime.now().day),
                     "ingestion_status": "failure",
                     "error_details": parse_html_response["status_details"],
-                    "start_time" : start_time,
-                    "end_time" : end_time
+                    "start_time": start_time,
+                    "end_time": end_time
                 })
 
     elif filename.lower().endswith(('.pptx', '.PPTX')):
-        # print(os.path.join(adls_mnt_directory_path_formatted, filename))
+        # PowerPoint processing
         start_time = datetime.now()
-        # shub - check if the file is corrupt before parsing
         if os.path.getsize(os.path.join(adls_mnt_directory_path_formatted, filename)) > 0:
             parse_ppt_response = process_to_ppt_spark_df(os.path.join(adls_mnt_directory_path_formatted, filename))
             end_time = datetime.now()
             if parse_ppt_response["status_code"] == 200:
-                parse_ppt_response["dataframe"] = parse_ppt_response["dataframe"].withColumn("page_number",F.col("page_number").cast(IntegerType()))
-                display(parse_ppt_response["dataframe"])
+                parse_ppt_response["dataframe"] = parse_ppt_response["dataframe"].withColumn("page_number", F.col("page_number").cast(IntegerType()))
                 all_dfs.append(parse_ppt_response["dataframe"])
                 log_metadata.append({
                     "job_id": job_id,
                     "run_id": run_id,
-                    "rag_app_name" : rag_app_name_from_metadata_table,
-                    "rag_app_source_id" : rag_app_source_id_from_metadata_table,
-                    "source_doc_path" : os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
-                    "source_doc_name" : filename,
-                    "target_stage" : "silver layer",
-                    "target_path": rag_storage_acc_mount_point_from_metadata_table+silver_layer_target_path_from_metadata_table+"created_date="+str(datetime.now().year)+"-"+str(datetime.now().month)+"-"+str(datetime.now().day),
+                    "rag_app_name": rag_app_name_from_metadata_table,
+                    "rag_app_source_id": rag_app_source_id_from_metadata_table,
+                    "source_doc_path": os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
+                    "source_doc_name": filename,
+                    "target_stage": "silver layer",
+                    "target_path": rag_storage_acc_mount_point_from_metadata_table + silver_layer_target_path_from_metadata_table + "created_date=" + str(datetime.now().year) + "-" + str(datetime.now().month) + "-" + str(datetime.now().day),
                     "ingestion_status": "success",
-                    "start_time" : start_time,
-                    "end_time" : end_time
+                    "start_time": start_time,
+                    "end_time": end_time
                 })
             else:
                 log_metadata.append({
                     "job_id": job_id,
                     "run_id": run_id,
-                    "rag_app_name" : rag_app_name_from_metadata_table,
-                    "rag_app_source_id" : rag_app_source_id_from_metadata_table,
-                    "source_doc_path" : os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
-                    "source_doc_name" :filename,
-                    "target_stage" : "silver layer",
-                    "target_path": rag_storage_acc_mount_point_from_metadata_table+silver_layer_target_path_from_metadata_table+"created_date="+str(datetime.now().year)+"-"+str(datetime.now().month)+"-"+str(datetime.now().day),
+                    "rag_app_name": rag_app_name_from_metadata_table,
+                    "rag_app_source_id": rag_app_source_id_from_metadata_table,
+                    "source_doc_path": os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
+                    "source_doc_name": filename,
+                    "target_stage": "silver layer",
+                    "target_path": rag_storage_acc_mount_point_from_metadata_table + silver_layer_target_path_from_metadata_table + "created_date=" + str(datetime.now().year) + "-" + str(datetime.now().month) + "-" + str(datetime.now().day),
                     "ingestion_status": "failure",
                     "error_details": parse_ppt_response["status_details"],
-                    "start_time" : start_time,
-                    "end_time" : end_time
+                    "start_time": start_time,
+                    "end_time": end_time
                 })
+
     elif filename.lower().endswith(".xlsx"):
-        # print(os.path.join(adls_mnt_directory_path_formatted, filename))
+        # Excel processing
         start_time = datetime.now()
-        # shub - check if the file is corrupt before parsing
         if os.path.getsize(os.path.join(adls_mnt_directory_path_formatted, filename)) > 0:
-            parse_excel_response = create_excel_spark_dataframe(os.path.join(adls_mnt_directory_path_formatted, filename),translate=True)
+            parse_excel_response = create_excel_spark_dataframe(os.path.join(adls_mnt_directory_path_formatted, filename), translate=True)
             end_time = datetime.now()
             if parse_excel_response["status_code"] == 200:
-                parse_excel_response["dataframe"] = parse_excel_response["dataframe"].withColumn("row_number",F.col("row_number").cast(IntegerType()))
-                display(parse_excel_response["dataframe"])
+                parse_excel_response["dataframe"] = parse_excel_response["dataframe"].withColumn("row_number", F.col("row_number").cast(IntegerType()))
                 all_dfs.append(parse_excel_response["dataframe"])
                 log_metadata.append({
                     "job_id": job_id,
                     "run_id": run_id,
-                    "rag_app_name" : rag_app_name_from_metadata_table,
-                    "rag_app_source_id" : rag_app_source_id_from_metadata_table,
-                    "source_doc_path" : os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
-                    "source_doc_name" : filename,
-                    "target_stage" : "silver layer",
-                    "target_path": rag_storage_acc_mount_point_from_metadata_table+silver_layer_target_path_from_metadata_table+"created_date="+str(datetime.now().year)+"-"+str(datetime.now().month)+"-"+str(datetime.now().day),
+                    "rag_app_name": rag_app_name_from_metadata_table,
+                    "rag_app_source_id": rag_app_source_id_from_metadata_table,
+                    "source_doc_path": os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
+                    "source_doc_name": filename,
+                    "target_stage": "silver layer",
+                    "target_path": rag_storage_acc_mount_point_from_metadata_table + silver_layer_target_path_from_metadata_table + "created_date=" + str(datetime.now().year) + "-" + str(datetime.now().month) + "-" + str(datetime.now().day),
                     "ingestion_status": "success",
-                    "start_time" : start_time,
-                    "end_time" : end_time
+                    "start_time": start_time,
+                    "end_time": end_time
                 })
             else:
                 log_metadata.append({
                     "job_id": job_id,
                     "run_id": run_id,
-                    "rag_app_name" : rag_app_name_from_metadata_table,
-                    "rag_app_source_id" : rag_app_source_id_from_metadata_table,
-                    "source_doc_path" : os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
-                    "source_doc_name" :filename,
-                    "target_stage" : "silver layer",
-                    "target_path": rag_storage_acc_mount_point_from_metadata_table+silver_layer_target_path_from_metadata_table+"created_date="+str(datetime.now().year)+"-"+str(datetime.now().month)+"-"+str(datetime.now().day),
+                    "rag_app_name": rag_app_name_from_metadata_table,
+                    "rag_app_source_id": rag_app_source_id_from_metadata_table,
+                    "source_doc_path": os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
+                    "source_doc_name": filename,
+                    "target_stage": "silver layer",
+                    "target_path": rag_storage_acc_mount_point_from_metadata_table + silver_layer_target_path_from_metadata_table + "created_date=" + str(datetime.now().year) + "-" + str(datetime.now().month) + "-" + str(datetime.now().day),
                     "ingestion_status": "failure",
                     "error_details": parse_excel_response["status_details"],
-                    "start_time" : start_time,
-                    "end_time" : end_time
-                })
-
-    # ============================================================================
-    # AUDIO INTEGRATION: ADD AUDIO FILE PROCESSING CONDITION
-    # NEW CODE STARTS HERE - ADD AFTER XLSX CONDITION
-    # ============================================================================
-    elif filename.lower().endswith((".mp3", ".wav", ".m4a")):
-        print(f" ********* processing AUDIO file: {filename} **************** ")
-        start_time = datetime.now()
-        
-        # Check if file is not empty
-        if os.path.getsize(os.path.join(adls_mnt_directory_path_formatted, filename)) > 0:
-            
-            # Call our audio processing function
-            parse_audio_response = process_audio_file(os.path.join(adls_mnt_directory_path_formatted, filename))
-            
-            end_time = datetime.now()
-            
-            # Handle success case
-            if parse_audio_response["status_code"] == 200:
-                parse_audio_response["dataframe"] = parse_audio_response["dataframe"].withColumn("page_number", F.col("page_number").cast(IntegerType()))
-                display(parse_audio_response["dataframe"])
-                all_dfs.append(parse_audio_response["dataframe"])
-                
-                # Add success log
-                log_metadata.append({
-                    "job_id": job_id,
-                    "run_id": run_id,
-                    "rag_app_name": rag_app_name_from_metadata_table,
-                    "rag_app_source_id": rag_app_source_id_from_metadata_table,
-                    "source_doc_path": os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
-                    "source_doc_name": filename,
-                    "target_stage": "silver layer",
-                    "target_path": rag_storage_acc_mount_point_from_metadata_table + silver_layer_target_path_from_metadata_table + "created_date=" + str(datetime.now().year) + "-" + str(datetime.now().month) + "-" + str(datetime.now().day),
-                    "ingestion_status": "success",
                     "start_time": start_time,
                     "end_time": end_time
                 })
-            else:
-                # Add failure log
-                log_metadata.append({
-                    "job_id": job_id,
-                    "run_id": run_id,
-                    "rag_app_name": rag_app_name_from_metadata_table,
-                    "rag_app_source_id": rag_app_source_id_from_metadata_table,
-                    "source_doc_path": os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
-                    "source_doc_name": filename,
-                    "target_stage": "silver layer",
-                    "target_path": rag_storage_acc_mount_point_from_metadata_table + silver_layer_target_path_from_metadata_table + "created_date=" + str(datetime.now().year) + "-" + str(datetime.now().month) + "-" + str(datetime.now().day),
-                    "ingestion_status": "failure",
-                    "error_details": parse_audio_response["status_details"],
-                    "start_time": start_time,
-                    "end_time": end_time
-                })
-    # ============================================================================
-    # NEW CODE ENDS HERE
-    # ============================================================================
-        
+    
     else:
+        # Unsupported file type
         log_metadata.append({
-                "job_id": job_id,
-                "run_id": run_id,
-                "rag_app_name" : rag_app_name_from_metadata_table,
-                "rag_app_source_id" : rag_app_source_id_from_metadata_table,
-                "source_doc_path" : os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
-                "source_doc_name" :filename,
-                "target_stage" : "silver layer",
-                "target_path": adls_mnt_directory_path_from_metadata_table,
-                "ingestion_status": "failure",
-                "error_details": "file not supported",
-            })
+            "job_id": job_id,
+            "run_id": run_id,
+            "rag_app_name": rag_app_name_from_metadata_table,
+            "rag_app_source_id": rag_app_source_id_from_metadata_table,
+            "source_doc_path": os.path.join(adls_mnt_directory_path_from_metadata_table, filename),
+            "source_doc_name": filename,
+            "target_stage": "silver layer",
+            "target_path": adls_mnt_directory_path_from_metadata_table,
+            "ingestion_status": "failure",
+            "error_details": "file not supported",
+        })
+
+print(f"Processing completed. Total DataFrames created: {len(all_dfs)}")
+
+# Cell 13: Merge All DataFrames
+if len(all_dfs) == 1:
+    print("merging all_dfs | inside all_df len 1 | no merge required")
+    running_df = all_dfs[0]
+elif len(all_dfs) == 2:
+    print("merging all_dfs | inside all_df len 2 | merge two dfs (static merge)")
+    running_df = all_dfs[0].unionByName(all_dfs[1], allowMissingColumns=True)
+elif len(all_dfs) >= 3:
+    print("merging all_dfs | inside all_df len >=3 | merge all dfs (dynamic merge)")
+    running_df = all_dfs[0].unionByName(all_dfs[1], allowMissingColumns=True)
+    print(f"merging all_dfs | len of all_dfs: {len(all_dfs)}")
+    print(f"merging all_dfs | len of all_dfs for iteration: {len(all_dfs[2:])}")
+    for df in all_dfs[2:]:
+        running_df = running_df.unionByName(df, allowMissingColumns=True)
+else:
+    print("merging all_dfs | all_dfs is empty | none of the files were parsed")
+    # Create empty DataFrame with proper schema if no files processed
+    empty_schema = get_empty_silver_table_schema()
+    running_df = empty_schema["dataframe"]
+
+# Cell 14: Add Required Columns and Metadata
+if len(all_dfs) > 0:
+    running_df = add_few_cols_to_df(running_df, is_silver_table=True)
+
+# Cell 15: Display Results
+print("Final DataFrame Structure:")
+if 'running_df' in locals():
+    running_df.display()
+    print(f"Total rows in final DataFrame: {running_df.count()}")
+
+# Cell 16: Create External Table and Save Data
+table_name = unity_catalog_name_from_metadata_table + "." + schema_name_from_metadata_table + "." + silver_table_name_from_metadata_table
+location = rag_storage_account_url_from_metadata_table + silver_layer_target_path_from_metadata_table
+
+gen_func_obj.create_silver_table(table_name, location)
+
+if 'running_df' in locals() and running_df.count() > 0:
+    # Check if table exists and handle duplicates
+    if spark.catalog._jcatalog.tableExists(table_name):
+        distinct_files = running_df.select("file_path").distinct().rdd.flatMap(lambda x: x).collect()
+        distinct_files = [item.split("/")[-1] for item in distinct_files]
+        to_be_deleted_files_str = '""","""'.join(distinct_files)
+        print(f"Files to be refreshed: {to_be_deleted_files_str}")
+        deletion_query = "delete from " + table_name + ' where regexp_extract(file_path,\'.*/([^/]+)$\',1) IN ("""' + to_be_deleted_files_str + '""")'
+        print(f"Deletion query: {deletion_query}")
+        spark.sql(deletion_query)
+
+    # Save to table
+    if data_st.lower() == "url":
+        running_df.write.format("delta").mode("overwrite").saveAsTable(table_name)
+    else:
+        running_df.write.format("delta").mode("append").saveAsTable(table_name)
+    
+    silver_job_end_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    gen_func_obj.update_silver_table_load_details(
+        rag_app_name_from_metadata_table,
+        data_st,
+        source_url_sharepoint if source_url_sharepoint else source_url,
+        table_name,
+        silver_job_end_time
+    )
+    print(f"Data successfully saved to table: {table_name}")
+
+# Cell 17: Save Logging Information
+if log_metadata:
+    log_silver_ingestion_status_df = spark.createDataFrame(log_metadata)
+    gen_func_obj.write_data_to_log(log_silver_ingestion_status_df)
+    print(f"Logged {len(log_metadata)} processing records")
+
+# Cell 18: Processing Summary
+print("=" * 80)
+print("DOCUMENT PROCESSING SUMMARY")
+print("=" * 80)
+print(f"Total files processed: {len(log_metadata)}")
+success_count = sum(1 for log in log_metadata if log['ingestion_status'] == 'success')
+failure_count = len(log_metadata) - success_count
+print(f"Successful: {success_count}")
+print(f"Failed: {failure_count}")
+print(f"DataFrames created: {len(all_dfs)}")
+if 'running_df' in locals():
+    print(f"Final DataFrame rows: {running_df.count()}")
+print(f"Silver table: {table_name}")
+print("=" * 80)
+
+# Cell 19: Processing Complete
+print("✅ PIPELINE EXECUTION COMPLETE!")
+
+# Cell 20: Optional - View Final Results
+# Uncomment to see final table contents
+# %sql
+# SELECT file_path, content, created_date 
+# FROM ${table_name} 
+# WHERE file_path LIKE '%.mp3' 
+# ORDER BY created_date DESC 
+# LIMIT 5
