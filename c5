@@ -574,6 +574,15 @@ if log_metadata:
     for file_type, count in file_types.items():
         print(f"   {file_type}: {count}")
 
+
+
+
+# Audio DataFrame check
+if 'running_df' in locals():
+    mp3_df = running_df.filter(F.lower(F.col("file_path")).contains(".mp3"))
+    print(f"MP3 files found: {mp3_df.count()}")
+    if mp3_df.count() > 0:
+        display(mp3_df)
 if 'running_df' in locals():
     print(f"Final DataFrame rows: {running_df.count()}")
 print(f"Silver table: {table_name}")
