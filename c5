@@ -1,4 +1,4 @@
-# Cell 11: Initialize Processing Variables (Fixed Translation Import)
+# Cell 11: Initialize Processing Variables (MP3 Focus - No Translation)
 from datetime import datetime
 
 # file format level, save all dataframes
@@ -11,18 +11,8 @@ log_metadata = []
 
 client = authenticate_text_analytics_client()
 
-# Fix for translation languages - handle import error gracefully
-try:
-    translate_supported_languages = text_translator.get_languages()
-    list_of_translation_supported_languages = list(translate_supported_languages['translation'].keys())
-    print(f"Supported translation languages: {len(list_of_translation_supported_languages)} languages")
-except Exception as e:
-    print(f"Warning: Could not load translation languages: {e}")
-    # Use a default list of common languages
-    list_of_translation_supported_languages = ['en', 'es', 'fr', 'de', 'it', 'pt', 'ru', 'ja', 'ko', 'zh']
-    print(f"Using default language list: {len(list_of_translation_supported_languages)} languages")
-
-print("Processing initialization complete")
+# Skip translation setup for MP3 processing - not needed for audio transcription
+print("Processing initialization complete - ready for all file types including MP3")
 
 # Cell 12: Main File Processing Loop with All File Types Including MP3
 for filename in os.listdir(adls_mnt_directory_path_formatted):
