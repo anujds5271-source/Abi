@@ -1,12 +1,25 @@
+# Check if bronze layer process completed
+print("Bronze layer files:")
 import os
-path = "/Workspace/Users/anuj.b.sharma@unilever.com/1/Volumes/bnlwe_ai_foundation_rag_dev/unvsg2__/unvsg2_audio_rag_test_raw/2025/08/14/17/38/22/0_sp/"
-print(f"Directory exists: {os.path.exists(path)}")
-if os.path.exists(path):
-    files = os.listdir(path)
-    print(f"Total files: {len(files)}")
+if os.path.exists(adls_mnt_directory_path_formatted):
+    files = os.listdir(adls_mnt_directory_path_formatted)
+    print(f"Files in bronze layer: {len(files)}")
     for file in files:
         print(f"  - {file}")
         if file.lower().endswith('.mp3'):
-            print(f"    ✅ MP3 file found!")
+            print(f"    ✅ MP3 file ready for processing: {file}")
 else:
-    print("❌ Directory not found")
+    print("❌ Bronze layer directory not found")
+    print(f"Looking for: {adls_mnt_directory_path_formatted}")
+
+
+
+# Check audio transcription function
+try:
+    if 'transcribe_mp3_memory_only' in dir():
+        print("✅ Audio function available")
+    else:
+        print("❌ Need to import audio functions")
+        print("Run your audio pipeline notebook first!")
+except:
+    print("❌ Audio function not available")
