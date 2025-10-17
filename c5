@@ -1,4 +1,502 @@
-original_df_pir = adjust_times(original_df_pir, rec_start_time)
-logger.info("########################### ADJUSTED TIMES IN THE DF PIR ######################")
-original_df_pir = convert_time_zone_with_label(original_df_pir, source_timezone, target_timezone)  # ← UPDATED
-logger.info("###########################  TIME ZONE IN THE DF PIR ######################")
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from typing import List, Optional
+from pydantic import BaseModel, Field
+from datetime import datetime, timedelta
+from pathlib import Path
+from io import BytesIO
+import pandas as pd
+import tempfile
+import json
+import uuid
+import os
+import re
+
+# Internal imports
+from app.utils.video_to_audio import VideoProcessor
+from app.utils.pir_processor import PirDocumentProcessor
+from app.utils.chat_processor import ChatProcessor
+from app.utils.whiteboard_extractor import WhiteBoardExtractor
+from app.utils.fast_transcription import VttProcessor
+from app.utils.genai import generate_pir
+from app.utils.evaluator import DocumentProcessor, RougeCalculator, LAJEvaluator
+from app.utils import constants
+from app.logger_config import get_logger
+
+# Configure FFmpeg
+ffmpeg_path = os.path.join(os.path.dirname(__file__), "ffmpeg", "bin")
+os.environ["PATH"] = f"{ffmpeg_path}{os.pathsep}{os.environ['PATH']}"
+
+# Initialize logger
+logger = get_logger(__name__)
+logger.info("Application started successfully")
+
+# Initialize FastAPI
+app = FastAPI(
+    title="PIR Report Generator API",
+    description="Automated Post-Incident Review Report Generation",
+    version="1.0.0"
+)
+
+# CORS Configuration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # TODO: Restrict in production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ==================== CONSTANTS ====================
+SUPPORTED_TIMEZONES = {
+    "HKT": 8.0,      # Hong Kong Time (UTC+8)
+    "IST": 5.5,      # Indian Standard Time (UTC+5:30)
+    "CET": 1.0,      # Central European Time (UTC+1)
+    "CEST": 2.0      # Central European Summer Time (UTC+2)
+}
+
+TIME_FORMAT = "%H:%M"
+TIME_REGEX = r'^\d{2}:\d{2}$'
+
+# ==================== PYDANTIC MODELS ====================
+class PIRReportRequest(BaseModel):
+    report_id: str = Field(..., description="Unique report identifier")
+    result_json: dict = Field(..., description="Report data in JSON format")
+
+# ==================== UTILITY FUNCTIONS ====================
+def extract_timezone_code(timezone_string: str) -> str:
+    """
+    Extract timezone code from formatted string.
+    Example: "HKT (Hong Kong Time)" -> "HKT"
+    """
+    return timezone_string.split()[0] if timezone_string else ""
+
+def validate_timezone(timezone: str) -> None:
+    """Validate if timezone is supported."""
+    if timezone not in SUPPORTED_TIMEZONES:
+        raise ValueError(
+            f"Unsupported timezone: {timezone}. "
+            f"Supported: {', '.join(SUPPORTED_TIMEZONES.keys())}"
+        )
+
+def adjust_times(df: pd.DataFrame, start_time: str) -> pd.DataFrame:
+    """
+    Adjust VTT timestamps to user-specified meeting start time.
+    
+    Args:
+        df: DataFrame with 'start_time' column in seconds
+        start_time: Meeting start time in HH:MM format
+    
+    Returns:
+        DataFrame with adjusted times in HH:MM format
+    """
+    user_start = datetime.strptime(start_time, TIME_FORMAT)
+    base_timedelta = timedelta(hours=user_start.hour, minutes=user_start.minute)
+    
+    def adjust_time(seconds: float) -> str:
+        adjusted = base_timedelta + timedelta(seconds=seconds)
+        total_seconds = int(adjusted.total_seconds())
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, _ = divmod(remainder, 60)
+        return f"{hours:02d}:{minutes:02d}"
+    
+    df = df.copy()
+    df['start_time'] = df['start_time'].astype(float).apply(adjust_time)
+    return df
+
+def convert_timezone(
+    df: pd.DataFrame, 
+    source_tz: str, 
+    target_tz: str
+) -> pd.DataFrame:
+    """
+    Convert times from source timezone to target timezone.
+    
+    Args:
+        df: DataFrame with 'start_time' column in HH:MM format
+        source_tz: Source timezone (e.g., "HKT (Hong Kong Time)")
+        target_tz: Target timezone (e.g., "IST (Indian Standard Time)")
+    
+    Returns:
+        DataFrame with converted times and timezone labels
+    """
+    # Extract timezone codes
+    source_code = extract_timezone_code(source_tz)
+    target_code = extract_timezone_code(target_tz)
+    
+    logger.info(f"Timezone conversion: {source_code} -> {target_code}")
+    
+    # Validate timezones
+    validate_timezone(source_code)
+    validate_timezone(target_code)
+    
+    df = df.copy()
+    
+    # Same timezone: just add label
+    if source_code == target_code:
+        df['start_time'] = df['start_time'].apply(
+            lambda t: f"{t} {target_code}"
+        )
+        logger.info("Same timezone - label added only")
+        return df
+    
+    # Different timezone: convert
+    offset_diff = SUPPORTED_TIMEZONES[target_code] - SUPPORTED_TIMEZONES[source_code]
+    time_delta = timedelta(hours=offset_diff)
+    
+    logger.info(f"Time difference: {offset_diff} hours")
+    
+    def convert_time(time_str: str) -> str:
+        time_obj = datetime.strptime(time_str, TIME_FORMAT)
+        converted = time_obj + time_delta
+        return f"{converted.strftime(TIME_FORMAT)} {target_code}"
+    
+    df['start_time'] = df['start_time'].apply(convert_time)
+    logger.info("Timezone conversion completed")
+    
+    return df
+
+def cleanup_temp_files(file_paths: List[str]) -> None:
+    """Safely delete temporary files."""
+    for path in file_paths:
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+                logger.debug(f"Deleted: {path}")
+        except Exception as e:
+            logger.error(f"Failed to delete {path}: {e}")
+
+# ==================== API ENDPOINTS ====================
+@app.get("/", tags=["Health"])
+def health_check():
+    """Health check endpoint."""
+    return {
+        "status": "healthy",
+        "service": "PIR Report Generator",
+        "version": "1.0.0"
+    }
+
+@app.post("/upload-files/", tags=["PIR Generation"])
+async def generate_pir_report(
+    uploaded_video_files: List[UploadFile] = File(..., description="Video recording files"),
+    uploaded_vtt_files: List[UploadFile] = File(..., description="VTT subtitle files"),
+    uploaded_whiteboard_image: UploadFile = File(..., description="Whiteboard image"),
+    rec_start_time: str = Form(..., regex=TIME_REGEX, description="Meeting start time (HH:MM)"),
+    source_timezone: str = Form(..., description="Meeting timezone"),
+    target_timezone: str = Form(..., description="Report timezone"),
+    uploaded_chat_file: Optional[UploadFile] = File(None, description="Chat log file"),
+    process_chat: bool = Form(True, description="Process chat file if provided")
+):
+    """
+    Generate PIR report from uploaded files.
+    
+    Returns:
+        JSON response with report data and unique report ID
+    """
+    start_time = datetime.now()
+    temp_files = []
+    
+    try:
+        logger.info("=== PIR Generation Started ===")
+        
+        # Validate inputs
+        if len(uploaded_video_files) != len(uploaded_vtt_files):
+            raise HTTPException(
+                status_code=400,
+                detail="Video and VTT file counts must match"
+            )
+        
+        if not re.match(TIME_REGEX, rec_start_time):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid time format. Use {TIME_FORMAT}"
+            )
+        
+        # Process videos and VTT files
+        all_dataframes = []
+        cumulative_time = 0.0
+        
+        for video_file, vtt_file in zip(uploaded_video_files, uploaded_vtt_files):
+            logger.info(f"Processing: {video_file.filename}")
+            
+            # Save video to temp file
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp_video:
+                tmp_video.write(await video_file.read())
+                video_path = tmp_video.name
+                temp_files.append(video_path)
+            
+            # Save VTT to temp file
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".vtt") as tmp_vtt:
+                tmp_vtt.write(await vtt_file.read())
+                vtt_path = tmp_vtt.name
+                temp_files.append(vtt_path)
+            
+            # Convert video to audio
+            video_processor = VideoProcessor()
+            audio_paths = video_processor.convert_and_upload_all_videos([video_path])
+            
+            for audio_path in audio_paths:
+                temp_files.append(audio_path)
+                
+                # Transcribe and align with VTT
+                vtt_processor = VttProcessor(audio_path, vtt_path)
+                vtt_processor.fast_transcription()
+                df = vtt_processor.associate_transcription_with_vtt()
+                
+                if df is None or df.empty:
+                    logger.warning(f"No data for {video_file.filename}")
+                    continue
+                
+                # Adjust timestamps
+                df["start_time"] = df["start_time"] + cumulative_time
+                cumulative_time = df["start_time"].iloc[-1]
+                
+                # Standardize columns
+                df.columns = ["Start_Time", "End_Time", "Speaker", "speech", "whisper_transcription"]
+                df = df[["Start_Time", "Speaker", "whisper_transcription"]]
+                
+                all_dataframes.append(df)
+        
+        if not all_dataframes:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to process any video files"
+            )
+        
+        # Combine all dataframes
+        combined_df = pd.concat(all_dataframes).sort_values("Start_Time").reset_index(drop=True)
+        
+        # Process chat file if provided
+        if process_chat and uploaded_chat_file:
+            logger.info("Processing chat file")
+            
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as tmp_chat:
+                tmp_chat.write(await uploaded_chat_file.read())
+                chat_path = tmp_chat.name
+                temp_files.append(chat_path)
+            
+            chat_processor = ChatProcessor(chat_path, rec_start_time)
+            chat_df = chat_processor.process_chat_file()
+            
+            if chat_df is not None and not chat_df.empty:
+                combined_df = pd.concat([chat_df, combined_df]).sort_values("Start_Time").reset_index(drop=True)
+        
+        # Process whiteboard image
+        logger.info("Processing whiteboard image")
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_wb:
+            tmp_wb.write(await uploaded_whiteboard_image.read())
+            wb_path = tmp_wb.name
+            temp_files.append(wb_path)
+        
+        whiteboard_extractor = WhiteBoardExtractor(wb_path)
+        whiteboard_data = whiteboard_extractor.extract_whiteboard_info()
+        
+        # Generate PIR using AI
+        logger.info("Generating PIR with AI")
+        pir_df, recovery_actions = generate_pir(combined_df.to_string())
+        
+        # Format PIR data
+        pir_df.columns = ["start_time", "description", "person"]
+        pir_df = adjust_times(pir_df, rec_start_time)
+        pir_df = convert_timezone(pir_df, source_timezone, target_timezone)
+        
+        # Prepare response
+        response_data = {
+            "whiteboard_data": whiteboard_data,
+            "original_df_pir": pir_df.to_json(orient="records"),
+            "incident_description": whiteboard_data.get("Issue Description", ""),
+            "recovery_actions": recovery_actions
+        }
+        
+        # Calculate execution time
+        elapsed = (datetime.now() - start_time).total_seconds()
+        logger.info(f"=== PIR Generated in {elapsed:.2f}s ===")
+        
+        return JSONResponse(content={
+            "status": "success",
+            "report_id": str(uuid.uuid4()),
+            "data": response_data,
+            "execution_time_seconds": elapsed
+        })
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"PIR generation failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+    
+    finally:
+        cleanup_temp_files(temp_files)
+
+@app.post("/download-pir-report/", tags=["PIR Download"])
+async def download_pir_report(request: PIRReportRequest):
+    """
+    Generate and download Word document from PIR data.
+    
+    Returns:
+        StreamingResponse with DOCX file
+    """
+    try:
+        logger.info(f"Generating document for report: {request.report_id}")
+        
+        result = request.result_json
+        
+        # Extract data
+        whiteboard_data = result['whiteboard_data']
+        pir_json = json.loads(result['original_df_pir'])
+        pir_df = pd.DataFrame(pir_json)
+        incident_desc = result['incident_description']
+        recovery_actions = result['recovery_actions']
+        
+        # Template path
+        template_path = os.path.join(
+            os.path.dirname(__file__),
+            'app', 'pir_doc', 'template_PIR.docx'
+        )
+        
+        # Generate document
+        processor = PirDocumentProcessor(template_path)
+        
+        doc = processor.process_document(
+            pir_df,
+            constants.search_text_is,
+            constants.search_text_ra,
+            constants.search_text_incident_manager,
+            constants.search_text_incident_ticket,
+            constants.search_text_business_impact,
+            constants.search_text_start_date,
+            constants.search_text_impacted_clients,
+            constants.search_text_res_time,
+            constants.search_text_incident_resolved,
+            constants.search_text_impacted_loc,
+            constants.search_text_impacted_app,
+            constants.search_text_num_user_impacted,
+            constants.search_text_issue_reported_by,
+            constants.search_text_incident_priority,
+            constants.search_text_vendor_name,
+            constants.search_text_problem_reference_num,
+            constants.search_text_mim_engaged,
+            constants.search_text_support_team_involved,
+            constants.search_text_workaround,
+            constants.search_text_change_related,
+            constants.search_text_rfo,
+            constants.search_text_outage_duration,
+            constants.search_text_observation,
+            constants.search_text_incident_reported,
+            constants.search_text_mim_notified,
+            incident_desc,
+            recovery_actions,
+            whiteboard_data['MIM Lead'],
+            whiteboard_data['Incident Number'],
+            whiteboard_data['Business Impact'],
+            whiteboard_data['Actual Start Time'],
+            whiteboard_data['Impacted Entities'],
+            whiteboard_data['Issue Resolved Time'],
+            whiteboard_data['Impacted Location'],
+            whiteboard_data['Impacted Application or Services'],
+            whiteboard_data['No. of users impacted'],
+            whiteboard_data['Issue reported by'],
+            whiteboard_data['Incident Priority'],
+            whiteboard_data['Vendor Name'],
+            whiteboard_data['Problem reference number'],
+            whiteboard_data['Date/Time when MIM Engaged'],
+            whiteboard_data['Support Team Involved'],
+            whiteboard_data['Workaround'],
+            whiteboard_data['Change Related/ Reference'],
+            whiteboard_data['Reason For Outage (RFO)'],
+            whiteboard_data['Outage Duration'],
+            whiteboard_data['Observation'],
+            ""  # output path not used
+        )
+        
+        # Save to BytesIO
+        buffer = BytesIO()
+        doc.save(buffer)
+        buffer.seek(0)
+        
+        logger.info("Document generated successfully")
+        
+        return StreamingResponse(
+            buffer,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={
+                "Content-Disposition": f"attachment; filename=PIR_Report_{request.report_id[:8]}.docx"
+            }
+        )
+    
+    except Exception as e:
+        logger.error(f"Document generation failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/evaluate-reports/", tags=["Evaluation"])
+async def evaluate_reports(
+    human_report: UploadFile = File(..., description="Human-generated report"),
+    ai_report: UploadFile = File(..., description="AI-generated report")
+):
+    """
+    Evaluate AI-generated report against human baseline.
+    
+    Returns:
+        Evaluation metrics (ROUGE, BLEU, METEOR, LLM-as-Judge)
+    """
+    temp_files = []
+    
+    try:
+        logger.info("Starting report evaluation")
+        
+        # Save uploaded files
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp1:
+            tmp1.write(await human_report.read())
+            human_path = tmp1.name
+            temp_files.append(human_path)
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp2:
+            tmp2.write(await ai_report.read())
+            ai_path = tmp2.name
+            temp_files.append(ai_path)
+        
+        # Process documents
+        doc_processor = DocumentProcessor()
+        human_json = doc_processor.read_document_to_json(human_path)
+        ai_json = doc_processor.read_document_to_json(ai_path)
+        
+        # Calculate metrics
+        rouge_calc = RougeCalculator()
+        rouge_result = rouge_calc.evaluate(human_json, ai_json)
+        rouge_df = rouge_calc.extract_score(rouge_result)
+        
+        laj_evaluator = LAJEvaluator(human_json, ai_json)
+        laj_df = laj_evaluator.evaluate()
+        
+        # Merge results
+        final_df = pd.merge(rouge_df, laj_df, on='Field')
+        
+        logger.info("Evaluation completed")
+        
+        return {
+            "status": "success",
+            "metrics": final_df.to_dict(orient="records")
+        }
+    
+    except Exception as e:
+        logger.error(f"Evaluation failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+    
+    finally:
+        cleanup_temp_files(temp_files)
+
+# ==================== APPLICATION STARTUP ====================
+@app.on_event("startup")
+async def startup_event():
+    """Log application startup."""
+    logger.info("=" * 50)
+    logger.info("PIR Report Generator API - Started")
+    logger.info(f"Supported Timezones: {', '.join(SUPPORTED_TIMEZONES.keys())}")
+    logger.info("=" * 50)
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Log application shutdown."""
+    logger.info("PIR Report Generator API - Shutting down")
